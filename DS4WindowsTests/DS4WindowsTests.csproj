@@ -37,6 +37,8 @@
   <ItemGroup>
     <Content Include="TestData\Switch2\pro-controller2-usb-common05-synthetic.json"
              CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="TestData\Profiles\*.xml"
+             CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

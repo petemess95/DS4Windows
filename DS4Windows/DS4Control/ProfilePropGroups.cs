@@ -351,6 +351,23 @@ namespace DS4Windows
             Y
         }
 
+        // Legacy = today's byte path; HighRes = high-resolution axis;
+        // Dither = high-resolution maths, error-diffused to a byte.
+        public enum PrecisionMode : byte
+        {
+            Legacy,
+            HighRes,
+            Dither,
+        }
+
+        // How gyro output merges with the real stick: Stronger per axis
+        // (today) or Add.
+        public enum BlendMode : byte
+        {
+            Stronger,
+            Add,
+        }
+
         public const double DEFAULT_MINCUTOFF = 0.4;
         public const double DEFAULT_BETA = 0.7;
         public const string DEFAULT_SMOOTH_TECHNIQUE = "one-euro";
@@ -364,6 +381,15 @@ namespace DS4Windows
         public const double DEFAULT_MAX_OUTPUT = 100.0;
         public const int DEFAULT_VERTICAL_SCALE = 100;
         public const uint DEFAULT_INVERTED = 0;
+        public const int DEFAULT_SOFT_DEADZONE = 0;
+        public const int MAX_SOFT_DEADZONE = 400;
+        public const double DEFAULT_GAME_CURVE = 1.0;
+        public const double MIN_GAME_CURVE = 1.0;
+        public const double MAX_GAME_CURVE = 4.0;
+        public const int DEFAULT_ACTIVATION_RAMP = 0;
+        public const int MAX_ACTIVATION_RAMP = 500;
+        public const PrecisionMode DEFAULT_PRECISION = PrecisionMode.Legacy;
+        public const BlendMode DEFAULT_BLEND = BlendMode.Stronger;
 
         public int deadZone = DEFAULT_DEADZONE;
         public int maxZone = DEFAULT_MAXZONE;
@@ -382,6 +408,12 @@ namespace DS4Windows
         public OutputStick outputStick = DEFAULT_OUTPUT_STICK;
         public OutputStickAxes outputStickDir = DEFAULT_OUTPUT_STICK_AXES;
         public bool jitterCompensation = JITTER_COMPENSATION_DEFAULT;
+        // Phase 6 settings; defaults reproduce today's output exactly.
+        public int softDeadZone = DEFAULT_SOFT_DEADZONE;
+        public double gameCurve = DEFAULT_GAME_CURVE;
+        public int activationRamp = DEFAULT_ACTIVATION_RAMP;
+        public PrecisionMode precision = DEFAULT_PRECISION;
+        public BlendMode blend = DEFAULT_BLEND;
 
         public delegate void GyroMouseStickInfoEventHandler(GyroMouseStickInfo sender,
             EventArgs args);
@@ -436,6 +468,11 @@ namespace DS4Windows
             useSmoothing = false;
             smoothWeight = SMOOTHING_WEIGHT_DEFAULT;
             jitterCompensation = JITTER_COMPENSATION_DEFAULT;
+            softDeadZone = DEFAULT_SOFT_DEADZONE;
+            gameCurve = DEFAULT_GAME_CURVE;
+            activationRamp = DEFAULT_ACTIVATION_RAMP;
+            precision = DEFAULT_PRECISION;
+            blend = DEFAULT_BLEND;
         }
 
         public void ResetSmoothing()

@@ -18,6 +18,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Xml;
@@ -1993,6 +1994,82 @@ namespace DS4WinWPF.DS4Control.DTOXml
             set => _gyroMouseStickJitterCompensation = XmlDataUtilities.StrToBool(value);
         }
 
+        // Phase 6 mouse-joystick settings (hand-editing only). Read as text so a
+        // bad value falls back to the default instead of failing the load;
+        // written only when not the default, so older profiles save unchanged.
+        private int _gyroMouseStickSoftDeadZone = GyroMouseStickInfo.DEFAULT_SOFT_DEADZONE;
+        [XmlElement("GyroMouseStickSoftDeadZone")]
+        public string GyroMouseStickSoftDeadZoneString
+        {
+            get => _gyroMouseStickSoftDeadZone.ToString(CultureInfo.InvariantCulture);
+            set => _gyroMouseStickSoftDeadZone = ParseIntInRange(value, 0,
+                GyroMouseStickInfo.MAX_SOFT_DEADZONE, GyroMouseStickInfo.DEFAULT_SOFT_DEADZONE);
+        }
+        public bool ShouldSerializeGyroMouseStickSoftDeadZoneString() =>
+            _gyroMouseStickSoftDeadZone != GyroMouseStickInfo.DEFAULT_SOFT_DEADZONE;
+
+        private double _gyroMouseStickGameCurve = GyroMouseStickInfo.DEFAULT_GAME_CURVE;
+        [XmlElement("GyroMouseStickGameCurve")]
+        public string GyroMouseStickGameCurveString
+        {
+            get => _gyroMouseStickGameCurve.ToString(CultureInfo.InvariantCulture);
+            set => _gyroMouseStickGameCurve = ParseDoubleInRange(value,
+                GyroMouseStickInfo.MIN_GAME_CURVE, GyroMouseStickInfo.MAX_GAME_CURVE,
+                GyroMouseStickInfo.DEFAULT_GAME_CURVE);
+        }
+        public bool ShouldSerializeGyroMouseStickGameCurveString() =>
+            _gyroMouseStickGameCurve != GyroMouseStickInfo.DEFAULT_GAME_CURVE;
+
+        private int _gyroMouseStickActivationRamp = GyroMouseStickInfo.DEFAULT_ACTIVATION_RAMP;
+        [XmlElement("GyroMouseStickActivationRamp")]
+        public string GyroMouseStickActivationRampString
+        {
+            get => _gyroMouseStickActivationRamp.ToString(CultureInfo.InvariantCulture);
+            set => _gyroMouseStickActivationRamp = ParseIntInRange(value, 0,
+                GyroMouseStickInfo.MAX_ACTIVATION_RAMP, GyroMouseStickInfo.DEFAULT_ACTIVATION_RAMP);
+        }
+        public bool ShouldSerializeGyroMouseStickActivationRampString() =>
+            _gyroMouseStickActivationRamp != GyroMouseStickInfo.DEFAULT_ACTIVATION_RAMP;
+
+        private GyroMouseStickInfo.PrecisionMode _gyroMouseStickPrecision = GyroMouseStickInfo.DEFAULT_PRECISION;
+        [XmlElement("GyroMouseStickPrecision")]
+        public string GyroMouseStickPrecisionString
+        {
+            get => _gyroMouseStickPrecision.ToString();
+            set => _gyroMouseStickPrecision = ParseNamedEnum(value, GyroMouseStickInfo.DEFAULT_PRECISION);
+        }
+        public bool ShouldSerializeGyroMouseStickPrecisionString() =>
+            _gyroMouseStickPrecision != GyroMouseStickInfo.DEFAULT_PRECISION;
+
+        private GyroMouseStickInfo.BlendMode _gyroMouseStickBlend = GyroMouseStickInfo.DEFAULT_BLEND;
+        [XmlElement("GyroMouseStickBlend")]
+        public string GyroMouseStickBlendString
+        {
+            get => _gyroMouseStickBlend.ToString();
+            set => _gyroMouseStickBlend = ParseNamedEnum(value, GyroMouseStickInfo.DEFAULT_BLEND);
+        }
+        public bool ShouldSerializeGyroMouseStickBlendString() =>
+            _gyroMouseStickBlend != GyroMouseStickInfo.DEFAULT_BLEND;
+
+        private static int ParseIntInRange(string value, int min, int max, int fallback) =>
+            int.TryParse(value?.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture,
+                out int parsed) && parsed >= min && parsed <= max ? parsed : fallback;
+
+        private static double ParseDoubleInRange(string value, double min, double max,
+            double fallback) =>
+            double.TryParse(value?.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture,
+                out double parsed) && parsed >= min && parsed <= max ? parsed : fallback;
+
+        // Names only: numeric text and undefined values fall back.
+        private static TEnum ParseNamedEnum<TEnum>(string value, TEnum fallback)
+            where TEnum : struct, Enum
+        {
+            string text = value?.Trim();
+            if (string.IsNullOrEmpty(text) || !char.IsLetter(text[0])) return fallback;
+            return Enum.TryParse(text, true, out TEnum parsed) && Enum.IsDefined(parsed) ?
+                parsed : fallback;
+        }
+
         [XmlElement("GyroMouseStickSmoothingSettings")]
         public GyroMouseStickSmoothingSettings GyroMouseStickSmoothingSettings
         {
@@ -2732,6 +2809,11 @@ namespace DS4WinWPF.DS4Control.DTOXml
             _gyroMouseStickMaxOutputEnabled = source.gyroMStickInfo[deviceIndex].maxOutputEnabled;
             GyroMouseStickVerticalScale = source.gyroMStickInfo[deviceIndex].vertScale;
             _gyroMouseStickJitterCompensation = source.gyroMStickInfo[deviceIndex].jitterCompensation;
+            _gyroMouseStickSoftDeadZone = source.gyroMStickInfo[deviceIndex].softDeadZone;
+            _gyroMouseStickGameCurve = source.gyroMStickInfo[deviceIndex].gameCurve;
+            _gyroMouseStickActivationRamp = source.gyroMStickInfo[deviceIndex].activationRamp;
+            _gyroMouseStickPrecision = source.gyroMStickInfo[deviceIndex].precision;
+            _gyroMouseStickBlend = source.gyroMStickInfo[deviceIndex].blend;
             GyroMouseStickSmoothingSettings = new GyroMouseStickSmoothingSettings()
             {
                 UseSmoothing = source.gyroMStickInfo[deviceIndex].useSmoothing,
@@ -3612,6 +3694,11 @@ namespace DS4WinWPF.DS4Control.DTOXml
             destination.gyroMStickInfo[deviceIndex].maxOutputEnabled = _gyroMouseStickMaxOutputEnabled;
             destination.gyroMStickInfo[deviceIndex].vertScale = GyroMouseStickVerticalScale;
             destination.gyroMStickInfo[deviceIndex].jitterCompensation = _gyroMouseStickJitterCompensation;
+            destination.gyroMStickInfo[deviceIndex].softDeadZone = _gyroMouseStickSoftDeadZone;
+            destination.gyroMStickInfo[deviceIndex].gameCurve = _gyroMouseStickGameCurve;
+            destination.gyroMStickInfo[deviceIndex].activationRamp = _gyroMouseStickActivationRamp;
+            destination.gyroMStickInfo[deviceIndex].precision = _gyroMouseStickPrecision;
+            destination.gyroMStickInfo[deviceIndex].blend = _gyroMouseStickBlend;
 
             if (GyroMouseStickSmoothingSettings != null)
             {
