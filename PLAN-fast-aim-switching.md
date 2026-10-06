@@ -1,8 +1,9 @@
 # Plan: Fast aim switching for DS4Windows (hbashton fork)
 
-Written 2026-10-05. Kick off a fresh session with:
+Written 2026-10-05.
 
-> Read `PLAN-fast-aim-switching.md` in `P:\codex\DS4Windows Branch` and implement it, starting at Phase 1.
+**Status (2026-10-05):** Phase 1 is done (results under Task 1.1). The next step is **Phase 2, starting
+at Task 2.1**. The kickoff message for that session is under "Next session" at the end of this file.
 
 ---
 
@@ -98,8 +99,10 @@ Deliverables, in order:
 ## 3. Working rules for the implementing session
 
 - Act as an **orchestrator**, per the user's global CLAUDE.md. Delegate each task below to the tier
-  suggested. Each delegation names this file and section, the exact files, the acceptance criteria,
-  and what to return. Never pass a `model` parameter.
+  suggested. **User preference (2026-10-05): this work is sensitive, so use mainly worker-complex
+  and worker-standard. Use the Sonnet workers (worker-rocket, worker-mechanical) only for the most
+  menial tasks.** The tiers below already reflect this. Each delegation names this file and
+  section, the exact files, the acceptance criteria, and what to return. Never pass a `model` parameter.
 - Tasks in Phases 2 and 3 both touch `ScpUtil.cs`. **Run them in order, not in parallel**, unless
   a task's files are clearly separate.
 - Match the surrounding code's style. The fork uses short "why" comments, `Volatile`/`Interlocked`
@@ -111,12 +114,12 @@ Deliverables, in order:
 
 ## 4. Phases and tasks
 
-| Phase | What | Tasks |
-|---|---|---|
-| 1. Setup | Baseline build and tests; how to test on hardware | 1.1, 1.2 |
-| 2. Faster profile switching | Cut each switch from ~150 ms to a few ms; stop the leak | 2.1–2.3 |
-| 3. Aim layer | Swap right-stick settings while L2 is held, with no profile switch | 3.1–3.5 |
-| 4. Testing | Full test run, then you test on the controller | 4.1, 4.2 |
+| Phase | What | Tasks | Status |
+|---|---|---|---|
+| 1. Setup | Baseline build and tests; how to test on hardware | 1.1, 1.2 | Done 2026-10-05 |
+| 2. Faster profile switching | Cut each switch from ~150 ms to a few ms; stop the leak | 2.1–2.3 | Next |
+| 3. Aim layer | Swap right-stick settings while L2 is held, with no profile switch | 3.1–3.5 | Not started |
+| 4. Testing | Full test run, then you test on the controller | 4.1, 4.2 | Not started |
 
 Do the phases in order. Tasks are numbered `<phase>.<step>`.
 
@@ -127,9 +130,18 @@ Do the phases in order. Tasks are numbered `<phase>.<step>`.
     `ProfileTests`, `TemporaryProfileIntentTests`, `ProfileSwitchInputContinuityTests`,
     `DS4StickProfileTransformTests`.
   - Record which tests already fail on clean `main`, so they aren't blamed on our changes later.
+  - **Done 2026-10-05 at `46b25cb` (plan-only commits on top of `3650240`, so the code is the same as `main`).**
+    - Build: succeeded, 0 warnings, 0 errors.
+    - The six baseline classes: **89 passed, 0 failed, 0 skipped.**
+      Filter used: `--filter "FullyQualifiedName~ProfileLoadPreparationTests|FullyQualifiedName~ProfileMigrationTests|FullyQualifiedName~ProfileTests|FullyQualifiedName~TemporaryProfileIntentTests|FullyQualifiedName~ProfileSwitchInputContinuityTests|FullyQualifiedName~DS4StickProfileTransformTests"`
+    - Full suite (`dotnet test ... --no-build`): **7130 passed, 0 failed, 12 skipped**, about 1 m 42 s.
+      The 12 skips are opt-in or live-hardware tests and are expected: 3 × `LiveProcessCapture*`,
+      `OptInInstalledBundleResolvesWithoutMutatingRegistryCacheOrLaunchingCode`, and 8 cases of
+      `RealGoApiAndDs4ClientRetireExactXboxActivation`.
+    - **No test fails on clean `main`.** Any failure from here on was caused by our changes.
 - **1.2 (already investigated): how to run a local build on real hardware.**
   - DS4Windows only accepts the `viiper.exe` whose SHA-256 is compiled into it
-    (`ViiperSetupManager.SupportedViiperSha256`, `ViiperSetupManager.cs:170`, value `9392A49E…892B`).
+    (`ViiperSetupManager.SupportedViiperSha256`, `DS4Control/Viiper/ViiperSetupManager.cs:170`, value `9392A49E…892B`).
     The installed `C:\Program Files\DS4Windows\VIIPER\viiper.exe` matches it exactly (checked
     2026-10-05). **Never change the VIIPER, USBip or HidHide constants or files on this branch.**
   - The install is self-contained (its runtimeconfig has `includedFrameworks`), and nothing checks
@@ -148,7 +160,7 @@ Do the phases in order. Tasks are numbered `<phase>.<step>`.
 
 ### Phase 2: Faster profile switching
 
-- **2.1 (worker-rocket): measure where the remaining time goes.**
+- **2.1 (worker-standard): measure where the remaining time goes.**
   - Add a benchmark test class, `ProfileSwitchCostBenchmark`, marked
     `[TestCategory("Benchmark")]` so normal runs can exclude it.
   - Time these separately: file read + `ProfileMigration`, `Deserialize`, and
@@ -157,7 +169,7 @@ Do the phases in order. Tasks are numbered `<phase>.<step>`.
   - Use small test profiles under `DS4WindowsTests` (copy the right-stick curve values above), not
     the user's files.
   - Return the numbers.
-- **2.2 (worker-rocket): build the serializer once and reuse it.**
+- **2.2 (worker-standard): build the serializer once and reuse it.**
   - Add one shared, thread-safe instance (for example `ProfileDTO.Serializer`, a
     `static readonly Lazy<XmlSerializer>` built with `GetAttributeOverrides()`).
   - Use it at `PreparedProfileLoad.cs:88` and `ScpUtil.cs:5577`.
@@ -241,7 +253,7 @@ Tasks:
   - When `aimLayerUseSourceLightbar` is set and the layer is on, show the source profile's main
     colour (keep it in the borrowed settings) wherever `DS4LightBar` picks `m_Led`.
   - Don't change flashing or battery-indicator behaviour.
-- **3.5 (worker-mechanical): hand-editing guide. No editor UI (user decision, 2026-10-05).**
+- **3.5 (worker-standard): hand-editing guide. No editor UI (user decision, 2026-10-05).**
   - Write `docs/aim-layer.md`. It should cover:
     - what the aim layer does, and which right-stick settings it swaps and which it keeps;
     - the exact `<AimLayer>` XML block from 3.1, with every field, its allowed values and its default;
@@ -282,3 +294,18 @@ Still open (ask the user once Phase 2 passes the Phase 4 tests):
 - Offer the Phase 2 speed-up to `hbashton/DS4Windows` as a pull request? Recommended: upstream changes this area
   often, and a merged fix avoids redoing it every release. Leave this plan file out of that pull
   request.
+
+## 6. Next session
+
+Paste this to start Phase 2:
+
+> Read `PLAN-fast-aim-switching.md` in `P:\codex\DS4Windows Branch` and implement Phase 2
+> (Tasks 2.1, 2.2, 2.3, in that order). Phase 1 is done: the baseline is under Task 1.1
+> (the 6 baseline classes: 89 pass; full suite: 7130 pass, 12 expected skips, 0 fail).
+>
+> Orchestrate it, and use mainly worker-complex and worker-standard agents. This work is too
+> sensitive to use the Sonnet workers for all but the most menial tasks.
+>
+> Commit after each task that passes its acceptance criteria. Once Phase 2 is complete, stop, make
+> sure all documentation is updated (including the status table and Task 2.1's benchmark numbers),
+> and write a handoff message like this one for Phase 3.
