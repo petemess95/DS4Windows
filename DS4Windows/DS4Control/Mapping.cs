@@ -2076,6 +2076,13 @@ namespace DS4Windows
         internal static DS4State SetCurveAndDeadzone(int device, DS4State cState, DS4State dState,
             object sourceOwner)
         {
+            // Aim layer: one volatile read; null (no layer) keeps every base
+            // read below. Decided from the raw triggers, before cState is
+            // replaced. The borrowed settings are shared and read-only.
+            AimLayerStickSettings aimLayer = AimLayerState.Current(device);
+            if (aimLayer != null && !aimLayer.IsTriggerHeld(cState.L2, cState.R2))
+                aimLayer = null;
+
             double rotation = /*tempDoubleArray[device] =*/  getLSRotation(device);
             double rotationRS = /*tempDoubleArray[device] =*/ getRSRotation(device);
             DS4StickFilterSet filters = stickFilters[device];
@@ -2100,6 +2107,12 @@ namespace DS4Windows
 
             filters.Left.ApplyFuzz(lsMod.fuzz, ref cState.LXAxis, ref cState.LYAxis);
             filters.Right.ApplyFuzz(rsMod.fuzz, ref cState.RXAxis, ref cState.RYAxis);
+
+            // Fuzz above stays on the base profile: its filter keeps state and
+            // resets when the delta changes. The rest of the RS chain follows
+            // the aim layer while it is held.
+            if (aimLayer != null)
+                rsMod = aimLayer.RSModInfo;
 
             cState.CopyTo(dState);
             //DS4State dState = new DS4State(cState);
@@ -2237,7 +2250,7 @@ namespace DS4Windows
             // Only apply deprecated Sensitivity modifier for Radial DZ
             if (rsMod.deadzoneType == StickDeadZoneInfo.DeadZoneType.Radial)
             {
-                double rsSens = getRSSens(device);
+                double rsSens = aimLayer != null ? aimLayer.RSSens : getRSSens(device);
                 if (rsSens != 1.0)
                 {
                     ApplyStickSensitivity(ref dState.RXAxis, rsSens);
@@ -2261,12 +2274,16 @@ namespace DS4Windows
             DS4StickProfileTransform.ApplyOutputCurve(lsMod, getLsOutCurveMode(device),
                 lsOutBezierCurveObj[device], ref dState.LXAxis, ref dState.LYAxis);
 
-            if (squStk.rsMode)
-                ApplySquareStickCoordinates(device, ref dState.RXAxis,
-                    ref dState.RYAxis, squStk.rsRoundness);
+            if (aimLayer != null ? aimLayer.RSSquareStick : squStk.rsMode)
+                ApplySquareStickCoordinates(device, ref dState.RXAxis, ref dState.RYAxis,
+                    aimLayer != null ? aimLayer.RSSquareStickRoundness : squStk.rsRoundness);
 
-            DS4StickProfileTransform.ApplyOutputCurve(rsMod, getRsOutCurveMode(device),
-                rsOutBezierCurveObj[device], ref dState.RXAxis, ref dState.RYAxis);
+            if (aimLayer != null)
+                DS4StickProfileTransform.ApplyOutputCurve(rsMod, aimLayer.RSOutCurveMode,
+                    aimLayer.RSOutBezierCurve, ref dState.RXAxis, ref dState.RYAxis);
+            else
+                DS4StickProfileTransform.ApplyOutputCurve(rsMod, getRsOutCurveMode(device),
+                    rsOutBezierCurveObj[device], ref dState.RXAxis, ref dState.RYAxis);
 
             int l2OutCurveMode = getL2OutCurveMode(device);
             if (l2OutCurveMode > 0 && dState.L2 != 0)

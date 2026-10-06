@@ -385,6 +385,44 @@ Tasks:
     on the very next report.
   - Also: the left stick and triggers are unchanged; L2's output value is unchanged; with no layer,
     the output is byte-for-byte identical to before.
+  - **Done 2026-10-05.**
+    - `Mapping.SetCurveAndDeadzone` only (`Mapping.cs`, ~2076): first line reads `AimLayerState.Current(device)`
+      and drops it to null unless `IsTriggerHeld(cState.L2, cState.R2)` on the **raw** input (before rotation,
+      calibration and `cState` reassignment). Null = no layer or trigger not held; the null path is one
+      `Volatile.Read` + null check, then the original code with the same reads in the same order.
+    - Swapped while held, through locals: `rsMod` (reassigned to `RSModInfo` *after* RS fuzz, so it drives
+      `ApplyDeadzoneAndOuter`, the Radial-only `rsSens` check and `ApplyOutputCurve`), `rsSens`, RS square-stick
+      mode/roundness, RS curve mode and `RSOutBezierCurve`. The helpers only read the borrowed objects
+      (`ApplyOutputCurve` uses `CaptureEvaluator()` = `Volatile.Read` + `arrayBezierLUT`); `outSqrStk` is per-call
+      scratch with no state across reports.
+    - Kept on the base profile: RS rotation, anti-snapback, calibration drift and **fuzz** (`DS4StickFilter.ApplyFuzz`
+      keeps the last sample and *resets when the delta changes*, so a borrowed fuzz would reset it on every
+      press/release). No other stateful RS filter reads `rsMod` or the curve. Left stick, triggers (L2 output
+      unchanged), gyro: untouched.
+    - Other RS consumers, not swapped: RS `Controls` mode (normal output, stick-to-mouse/mouse-joystick
+      bindings, delta accel) maps the processed state, so it follows the layer automatically. RS flick stick reads
+      the device's raw RS (`getCurrentStateRef()`), so no dead zone/curve applies to it, base or layer. Their
+      own settings (`rsOutputSettings`) are not part of the borrowed set. `getMouseMapping` reads `getRSDeadzone(device) == 0`
+      to add a 3-unit dead zone for RS-as-mouse buttons; left on the base (cosmetic, only differs if exactly one
+      profile has RS dead zone 0). The readings preview calls the same function with the editor slot, so it shows
+      the layer while the trigger is held (slot 8 gets a layer when a base profile is opened in the editor).
+      UI/editor/XML readers are not per-report.
+    - No allocation/lock: by inspection (no LINQ/closures/boxing/new; ternaries on fields), and a test measures
+      `GC.GetAllocatedBytesForCurrentThread()` = 0 over 20,000 warm calls each with no layer and with a layer
+      alternating on/off every report.
+    - Tests: `DS4WindowsTests/AimLayerMappingTests.cs`, 7 pass: linear base / Edge Expo source alternating
+      L2 0/100/101/255 report by report; R2 trigger with threshold 180; LS/L2/R2/LS-outer unchanged; no-layer
+      equivalence across 6 RS variants (radial/axial, square, modes 0/1/2/5/6, sens, max output, outer bind) x
+      LS/trigger settings x 127 byte + high-res inputs (layer published but never held, and a layer borrowing the
+      base's own settings, both identical to cleared); layer-on output equals the base with the source RS settings
+      for every variant; rotation + calibration, fuzz (both directions, incl. toggling mid-hold) and anti-snapback
+      from the base; allocation. Mutation checks: borrowing fuzz fails the fuzz test; deciding from processed
+      L2 fails 5 tests. Existing `MappedStickProductionPipelineChainingTests` (frozen legacy oracle) still pass.
+      `AimLayer` 44 (37 + 7); baseline 91; full suite `TestCategory!=Benchmark` **7176 pass, 12 expected skips,
+      0 fail**. Build: 0 warnings incremental (12 pre-existing on rebuild).
+    - For 3.4: the "layer on" decision is a local in `SetCurveAndDeadzone`, not published. The lightbar should
+      repeat it from the raw state (`AimLayerState.Current(device)?.IsTriggerHeld(rawL2, rawR2)`) or 3.4 could add
+      a per-device `Volatile` bool written there (a store per report, no allocation).
 - **3.4 (worker-standard): optional lightbar cue.**
   - When `aimLayerUseSourceLightbar` is set and the layer is on, show the source profile's main
     colour (keep it in the borrowed settings) wherever `DS4LightBar` picks `m_Led`.
