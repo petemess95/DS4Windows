@@ -5,7 +5,8 @@ Written 2026-10-05.
 **Status (2026-10-06):** Phases 1–4 are done (results under Tasks 1.1, 2.1, 2.2, 3.1–3.5, 4.1 and
 4.2; Task 2.3 was dropped, see its note). Phase 2 and the aim layer both passed on the user's DualSense
 Edge. The upstream pull request branch is prepared (section 5). **Phase 5 (hipfire layer) is done**, including the
-5.5 hardware test. **Phase 6 (better gyro aiming while aiming down sights) is next.**
+5.5 hardware test. **Phase 6 (better gyro aiming while aiming down sights): Tasks 6.1–6.4 done; 6.5 suite done,
+waiting for the user's quick check before 6.6.**
 
 ---
 
@@ -124,7 +125,7 @@ Deliverables, in order:
 | 3. Aim layer | Swap right-stick settings while L2 is held, with no profile switch | 3.1–3.5 | Done 2026-10-05 (`749f3d8`…`c2db58a`; guide in `docs/aim-layer.md`) |
 | 4. Testing | Full test run, then you test on the controller | 4.1, 4.2 | Done 2026-10-06 (all pass; no fixes needed) |
 | 5. Hipfire layer | Several aim layers per profile, first match wins, with an optional hold delay (R2 → Edge Hipfire after 100 ms, L2 still wins) | 5.1–5.5 | Done 2026-10-06 (`9da1d4b`, `0ece443`, `e321d2f`; 5.5 passed on hardware) |
-| 6. Gyro aiming | Better gyro-to-stick for small corrections while aiming; every change off by default and byte-identical when off | 6.1–6.9 | Planned 2026-10-06; next |
+| 6. Gyro aiming | Better gyro-to-stick for small corrections while aiming; every change off by default and byte-identical when off | 6.1–6.9 | 6.1–6.4 done 2026-10-06 (`61d190c`…`92079cc`); 6.5 waiting for the user's check |
 
 Do the phases in order. Tasks are numbered `<phase>.<step>`.
 
@@ -771,6 +772,10 @@ invert → output (Legacy byte / high-resolution / dithered byte).
   - Acceptance: oracle and new code byte-identical on every case; zero allocation over 20,000 warm calls;
     full suite `TestCategory!=Benchmark` 0 fail, same 12 skips.
   - Return: the method signature, the state struct, test counts.
+  - **Done 2026-10-06 at `61d190c`.** `GyroMouseStickMath.Compute(gyroYaw, gyroPitch, gyroRoll, elapsed,
+    horizontalAxis, msinfo, in modifier, ref GyroMouseStickFilterState)`; the state holds the One Euro filter
+    references (still owned by `Mouse.filterPair`) and an inline-array smoothing ring. ~500,000 oracle reports
+    byte-identical; suite 7237 pass / 12 skip.
 - **6.2 (worker-standard): the five settings, XML and reset.**
   - Files: `DS4Control/ProfilePropGroups.cs` (`GyroMouseStickInfo` fields, defaults, `Reset()`),
     `DS4Control/DTOXml/ProfileDTO.cs` (elements, `ShouldSerialize`, `MapFrom`/`MapTo`), tests.
@@ -779,6 +784,9 @@ invert → output (Legacy byte / high-resolution / dithered byte).
     files) save byte-identical to the previous build**; loading another profile resets the new fields.
     Nothing reads the settings yet. Full suite 0 fail, same skips.
   - Return: element names as written, files, test counts.
+  - **Done 2026-10-06 at `0c4cded`.** Elements as in the table, written after `GyroMouseStickJitterCompensation`.
+    Fixture copies of the three Edge profiles in `DS4WindowsTests/TestData/Profiles/` with their saved output
+    from `61d190c`; they save byte-identical. Suite 7275 pass / 12 skip.
 - **6.3 (worker-standard): soft deadzone, game curve, activation ramp.**
   - Files: `DS4Control/GyroMouseStickMath.cs`, `DS4Control/Mouse.cs` (ramp start: the report where gyro
     output switches on, reset when it switches off), tests.
@@ -787,6 +795,10 @@ invert → output (Legacy byte / high-resolution / dithered byte).
     length; ramp gain 0 on the first report, 1 at `Ramp` ms, restarts on re-activation. Zero allocation.
     Mutation check (report it): making each feature unconditional must fail the oracle tests.
   - Return: what changed, test counts, mutation results.
+  - **Done 2026-10-06 at `2986417`.** Ramp resets in `GyroMouseStickMath.Reset` (already called on every
+    report while output is off), so `Mouse.cs` was unchanged. Mutation: soft deadzone and game curve without
+    their guards (written another way) fail 4 oracle tests; a guard-less ramp can't be caught, because its
+    gain is exactly 1.0 once finished. Suite 7280 pass / 12 skip.
 - **6.4 (worker-complex): `HighRes` and `Dither`.**
   - Files: `DS4Control/GyroMouseStickMath.cs`, `DS4Control/Mouse.cs`, `DS4Control/Mapping.cs`
     (`PostMapStickData`: a high-resolution submit; `currentGyroX/Y` must keep the precise value for
@@ -797,8 +809,30 @@ invert → output (Legacy byte / high-resolution / dithered byte).
     as 16-bit; `Dither` average over 1,000 reports within 0.01 of the exact value, never more than one byte from
     it, no drift when gyro stops; epoch/reset rules from the concurrent publication tests still hold.
   - Return: design summary, files, test counts.
+  - **Done 2026-10-06 at `92079cc`.** Maths in doubles; Legacy truncates at the original points behind
+    `if (legacy)`. `GyroMouseStickOutput` carries a `DS4MappedStickAxis` per axis; `PostMapStickData` has a typed
+    `TrySubmit` and `currentGyroX/Y` are now `DS4MappedStickAxis`. Dither rounds per report with a ±0.5 carry,
+    cleared by `Reset` and at exactly centre. Suite 7296 pass / 12 skip.
+    **Notes for 6.6 from the 6.4 worker:** (1) Add must combine a precise gyro axis with a byte stick axis using
+    `ProfileCoordinate`, never `LegacyValue`; result high-res if either input is. (2) Dither quantises inside
+    `Compute` after the anti-deadzone, so in `Add` mode `Compute` should submit a precise pre-anti-deadzone value
+    whatever the precision, and the rounding/dither (and its carry) move to after the merge, which runs under
+    the gate. (3) `TryApplyCurrentGyro` re-merges `currentGyro`; with Add it must not be added twice per report.
 - **6.5 (orchestrator):** full suite, then pause for a quick check by the user before the shared merge
   changes (6.6), using the 6.9 steps 1–3 with `Precision Dither`, soft deadzone and game curve.
+  - **Suite done 2026-10-06 at `92079cc`:** `TestCategory!=Benchmark` **7296 pass, 12 expected skips, 0 fail**
+    (1 m 35 s). DLL `DS4Windowsind\Release
+et8.0-windows10.0.19041.0\DS4Windows.dll`, 11,023,872 bytes,
+    SHA-256 `f7f001f7783491e48a523e83eaa3e0101af5d7740aa943179b1baf3a0730b15e`.
+  - **Quick check by the user (pending):** DLL-swap method from 1.2, elevated copy. Back up `Profiles\` first.
+    1. Regression: profiles as they are; hipfire/ADS curves and lightbar behave exactly as after 5.5.
+    2. In DS4Windows, set Edge Linear's gyro output to Mouse-Joystick, trigger L2, save. ADS and make small
+       corrections; note the baseline feel.
+    3. Close DS4Windows and hand-edit Edge Linear, one change at a time, adding each element right after
+       `<GyroMouseStickJitterCompensation>`: (a) `<GyroMouseStickPrecision>Dither</GyroMouseStickPrecision>`;
+       (b) also `<GyroMouseStickSoftDeadZone>30</GyroMouseStickSoftDeadZone>` and change
+       `<GyroMouseStickDeadZone>` to `0`; (c) also `<GyroMouseStickGameCurve>1.5</GyroMouseStickGameCurve>`
+       (then try 2). Note each. Afterwards, set the gyro back to Controls if wanted.
 - **6.6 (worker-complex): `Add` blend.**
   - Files: `DS4Control/Mapping.cs` (`PostMapStickData`, `ApplyTo`, `TryApplyCurrentGyro`, `TempMouseJoystick`),
     `DS4Control/GyroMouseStickMath.cs`, `DS4Control/Mouse.cs`, tests.
@@ -856,7 +890,8 @@ opens the PR from the GitHub compare page with the prefilled title/body. Origina
 
 ## 6. Next session
 
-Phases 1–5 are done (5.5 passed on hardware 2026-10-06). Next is **Phase 6**. Kickoff message:
+Phase 6 Tasks 6.1–6.4 are done; 6.5's suite passed and the user's quick check (under 6.5) is pending. Kickoff
+message, once the check passes:
 
-> Implement Phase 6 of `PLAN-fast-aim-switching.md` (Tasks 6.1–6.5), as orchestrator. Stop at 6.5 for my
-> quick check before the merge changes in 6.6.
+> Phase 6 quick check passed. Continue Phase 6 of `PLAN-fast-aim-switching.md` from Task 6.6, as
+> orchestrator. Ask me the 6.7 decision when 6.6 is done.
