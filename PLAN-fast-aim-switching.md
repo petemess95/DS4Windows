@@ -2,7 +2,7 @@
 
 Written 2026-10-05. Kick off a fresh session with:
 
-> Read `PLAN-fast-aim-switching.md` in `P:\codex\DS4Windows Branch` and implement it, starting at Phase 0.
+> Read `PLAN-fast-aim-switching.md` in `P:\codex\DS4Windows Branch` and implement it, starting at Phase 1.
 
 ---
 
@@ -17,9 +17,9 @@ switch, which:
 
 Deliverables, in order:
 
-- **Part A: cheap profile switching.** Make any profile switch cost a few ms instead of ~150 ms
+- **Phase 2, faster profile switching.** Make any profile switch cost a few ms instead of ~150 ms
   and stop the leak. Small and low risk, and a good candidate to send upstream as a pull request.
-- **Part B: aim layer.** A per-profile setting: "while L2 is held, the right stick uses the stick
+- **Phase 3, aim layer.** A per-profile setting: "while L2 is held, the right stick uses the stick
   settings from profile X". No profile switch at all; the curve changes on the next input report.
 
 ## 2. Context (already established; do not re-investigate)
@@ -62,7 +62,7 @@ Deliverables, in order:
 - **Logs from RC4.6.2 (Sept 17–21):** ~1.47M lines of `Controller 1 is using Profile "Edge Expo"`,
   at ~507 per second while L2 was held. The switch action re-fired on every input report. **This is
   already fixed in RC4.6.3+**: logs since RC4.6.6 show one line per press. Do not re-fix it, but
-  don't regress it either (see the tests in Phase 3).
+  don't regress it either (see the tests in Phase 4).
 - **Measured on RC4.6.6 code with the user's two profiles** (temporary MSTest probe, since deleted):
 
   | Measurement | Result |
@@ -73,7 +73,7 @@ Deliverables, in order:
 
   The remaining ~70 ms is most likely `ProfileMigration` (an XML document parse) plus
   `candidate.MapTo(BackingStore.CreateProfileValidationStore())`, which builds an entire
-  `BackingStore` each time. That split has not been measured yet; Task A0 measures it.
+  `BackingStore` each time. That split has not been measured yet; Task 2.1 measures it.
 
 ### Key code locations
 | What | Where |
@@ -100,7 +100,7 @@ Deliverables, in order:
 - Act as an **orchestrator**, per the user's global CLAUDE.md. Delegate each task below to the tier
   suggested. Each delegation names this file and section, the exact files, the acceptance criteria,
   and what to return. Never pass a `model` parameter.
-- Tasks in Part A and Part B both touch `ScpUtil.cs`. **Run them in order, not in parallel**, unless
+- Tasks in Phases 2 and 3 both touch `ScpUtil.cs`. **Run them in order, not in parallel**, unless
   a task's files are clearly separate.
 - Match the surrounding code's style. The fork uses short "why" comments, `Volatile`/`Interlocked`
   for state shared between threads, and per-device arrays sized `Global.TEST_PROFILE_ITEM_COUNT`.
@@ -111,14 +111,23 @@ Deliverables, in order:
 
 ## 4. Phases and tasks
 
-### Phase 0: Setup
-- **0.1 (orchestrator, inline).**
+| Phase | What | Tasks |
+|---|---|---|
+| 1. Setup | Baseline build and tests; how to test on hardware | 1.1, 1.2 |
+| 2. Faster profile switching | Cut each switch from ~150 ms to a few ms; stop the leak | 2.1–2.3 |
+| 3. Aim layer | Swap right-stick settings while L2 is held, with no profile switch | 3.1–3.5 |
+| 4. Testing | Full test run, then you test on the controller | 4.1, 4.2 |
+
+Do the phases in order. Tasks are numbered `<phase>.<step>`.
+
+### Phase 1: Setup
+- **1.1 (orchestrator, inline).**
   - Confirm `fast-aim-switching` is checked out and clean.
   - Build, then run the baseline tests: `ProfileLoadPreparationTests`, `ProfileMigrationTests`,
     `ProfileTests`, `TemporaryProfileIntentTests`, `ProfileSwitchInputContinuityTests`,
     `DS4StickProfileTransformTests`.
   - Record which tests already fail on clean `main`, so they aren't blamed on our changes later.
-- **0.2 (already investigated): how to run a local build on real hardware.**
+- **1.2 (already investigated): how to run a local build on real hardware.**
   - DS4Windows only accepts the `viiper.exe` whose SHA-256 is compiled into it
     (`ViiperSetupManager.SupportedViiperSha256`, `ViiperSetupManager.cs:170`, value `9392A49E…892B`).
     The installed `C:\Program Files\DS4Windows\VIIPER\viiper.exe` matches it exactly (checked
@@ -137,9 +146,9 @@ Deliverables, in order:
   - After any upstream update, rebase the branch onto the new release before swapping the DLL again.
     A DLL built from an older commit won't match the new VIIPER version or the new dependencies.
 
-### Part A: cheap profile switching
+### Phase 2: Faster profile switching
 
-- **A0 (worker-rocket): measure where the remaining time goes.**
+- **2.1 (worker-rocket): measure where the remaining time goes.**
   - Add a benchmark test class, `ProfileSwitchCostBenchmark`, marked
     `[TestCategory("Benchmark")]` so normal runs can exclude it.
   - Time these separately: file read + `ProfileMigration`, `Deserialize`, and
@@ -148,14 +157,14 @@ Deliverables, in order:
   - Use small test profiles under `DS4WindowsTests` (copy the right-stick curve values above), not
     the user's files.
   - Return the numbers.
-- **A1 (worker-rocket): build the serializer once and reuse it.**
+- **2.2 (worker-rocket): build the serializer once and reuse it.**
   - Add one shared, thread-safe instance (for example `ProfileDTO.Serializer`, a
     `static readonly Lazy<XmlSerializer>` built with `GetAttributeOverrides()`).
   - Use it at `PreparedProfileLoad.cs:88` and `ScpUtil.cs:5577`.
   - Grep for any other `new XmlSerializer(` that passes `XmlAttributeOverrides` and treat it the same way.
   - Acceptance: a test shows repeated `TryPrepare` calls no longer increase the loaded-assembly
-    count. Average warm `TryPrepare` drops by about 80 ms. Baseline tests are no worse than in 0.1.
-- **A2 (worker-complex): cache prepared profiles.**
+    count. Average warm `TryPrepare` drops by about 80 ms. Baseline tests are no worse than in 1.1.
+- **2.3 (worker-complex): cache prepared profiles.**
   - Cache per full path, keyed on `(LastWriteTimeUtc, Length)`. Store the text after migration, the
     `Migrated` flag, and a "passed validation" flag.
   - On a cache hit, skip the file read, the migration, and the `MapTo(validation store)` check. Only
@@ -166,15 +175,13 @@ Deliverables, in order:
     (grep the profile list and editor code), in addition to the timestamp/size check.
   - Never cache a failed preparation.
   - Acceptance:
-    - Warm `TryPrepare` averages under 10 ms in the A0 benchmark.
+    - Warm `TryPrepare` averages under 10 ms in the 2.1 benchmark.
     - New tests cover: editing the file (new timestamp or size) is picked up; a hit returns a fresh
       DTO each time; a migrated profile is re-read after the auto-save rewrites it; a missing or
       invalid file still fails the same way as before (`ProfilePreparationFailure` values unchanged).
-    - Baseline tests are no worse than in 0.1.
-- **A3: dropped (user decision, 2026-10-05).** Keep the per-press "using Profile" log line as it is.
-  It costs about one line per press, and it's useful evidence if switching misbehaves again.
+    - Baseline tests are no worse than in 1.1.
 
-### Part B: aim layer (right-stick settings swap while L2 is held)
+### Phase 3: Aim layer (right-stick settings swap while L2 is held)
 
 Design decisions (already made):
 
@@ -192,7 +199,7 @@ Design decisions (already made):
   it feels the same as the user's current setup. v1 supports L2 and R2 only.
 - **How the borrowed settings are stored:** an immutable `AimLayerStickSettings` object per device,
   published with `Volatile.Write` and read with `Volatile.Read`. It is built off the input thread
-  when the base profile loads, by preparing the source profile (fast thanks to A2) and copying
+  when the base profile loads, by preparing the source profile (fast thanks to 2.3) and copying
   values out of a scratch store. **Never** copy them out of a live device slot.
 - **Edge cases:**
   - Missing or invalid source profile: log one warning and leave the layer off.
@@ -203,7 +210,7 @@ Design decisions (already made):
 
 Tasks:
 
-- **B1 (worker-complex): data model and XML.**
+- **3.1 (worker-complex): data model and XML.**
   - Add per-device settings to `BackingStore`: `aimLayerEnabled` (bool), `aimLayerTrigger`
     (`DS4Controls`, default `L2`), `aimLayerThreshold` (byte, default 100), `aimLayerSourceProfile`
     (string), `aimLayerUseSourceLightbar` (bool).
@@ -213,7 +220,7 @@ Tasks:
     update it only if it is.
   - Acceptance: a save-then-load test keeps every field. A profile without `<AimLayer>` loads with the
     layer off. Existing `ProfileTests` and `ProfileMigrationTests` still pass.
-- **B2 (worker-complex): build and publish the borrowed settings.**
+- **3.2 (worker-complex): build and publish the borrowed settings.**
   - Add `AimLayerStickSettings` (immutable) and a per-device published reference.
   - Build it during profile apply as described above, without blocking the report-pause window. Keep
     preparation outside `TryHaltReportingRunAction`, the same way `GuardedProfileReload` prepares
@@ -221,7 +228,7 @@ Tasks:
   - Clear it when the layer is disabled or the controller is removed.
   - Acceptance: tests show the borrowed settings match the source profile's right-stick values;
     editing and saving the source profile rebuilds them; a missing source leaves them empty.
-- **B3 (worker-complex): runtime swap in `SetCurveAndDeadzone`.**
+- **3.3 (worker-complex): runtime swap in `SetCurveAndDeadzone`.**
   - When the layer is on, take `rsMod`, `rsSens`, the RS square-stick fields, the curve mode and the
     bezier curve from the borrowed settings.
   - Must not allocate or lock in the per-report path.
@@ -230,35 +237,35 @@ Tasks:
     on the very next report.
   - Also: the left stick and triggers are unchanged; L2's output value is unchanged; with no layer,
     the output is byte-for-byte identical to before.
-- **B4 (worker-standard): optional lightbar cue.**
+- **3.4 (worker-standard): optional lightbar cue.**
   - When `aimLayerUseSourceLightbar` is set and the layer is on, show the source profile's main
     colour (keep it in the borrowed settings) wherever `DS4LightBar` picks `m_Led`.
   - Don't change flashing or battery-indicator behaviour.
-- **B5 (worker-mechanical): hand-editing guide. No editor UI (user decision, 2026-10-05).**
+- **3.5 (worker-mechanical): hand-editing guide. No editor UI (user decision, 2026-10-05).**
   - Write `docs/aim-layer.md`. It should cover:
     - what the aim layer does, and which right-stick settings it swaps and which it keeps;
-    - the exact `<AimLayer>` XML block from B1, with every field, its allowed values and its default;
+    - the exact `<AimLayer>` XML block from 3.1, with every field, its allowed values and its default;
     - where to put it in a profile, with the user's own example (Edge Linear borrowing from
       "Edge Expo", L2, threshold 100, source lightbar on);
     - **Close DS4Windows before editing a profile file**, or it may overwrite the change;
-    - once B1 is in, saving the profile from the normal editor keeps the block;
+    - once 3.1 is in, saving the profile from the normal editor keeps the block;
     - remove any old hold-to-switch profile action for the same trigger;
     - what happens if the source profile is missing, and where the warning appears.
-  - The element names in the doc must exactly match what B1 implemented. Check against
+  - The element names in the doc must exactly match what 3.1 implemented. Check against
     `ProfileDTO.cs`, and include a test-backed sample if one exists.
   - Editor UI is deferred. Revisit it only if the user asks after trying the aim layer.
 
-### Phase 3: Verification
-- **3.1 (orchestrator):**
-  - Run the full test suite and compare with the 0.1 baseline.
-  - Re-run the A0 benchmark and record the before and after numbers in the commit message or PR text.
-- **3.2 (the user, on hardware, using the steps from 0.2):**
-  1. **Part A alone.** Keep the existing "Switch 2 Edge Expo" action.
+### Phase 4: Testing
+- **4.1 (orchestrator):**
+  - Run the full test suite and compare with the 1.1 baseline.
+  - Re-run the 2.1 benchmark and record the before and after numbers in the commit message or PR text.
+- **4.2 (the user, on hardware, using the steps from 1.2):**
+  1. **Phase 2 alone.** Keep the existing "Switch 2 Edge Expo" action.
      - Rapid L2 taps (under 150 ms), holds of 1–2 s, and alternating quickly for 30 s.
      - In Task Manager, DS4Windows CPU should stay near idle.
      - The log should show one line per press.
      - The curve should feel correct on quick taps.
-  2. **Part B.** With DS4Windows closed, follow `docs/aim-layer.md` to add the `<AimLayer>` block to
+  2. **Phase 3.** With DS4Windows closed, follow `docs/aim-layer.md` to add the `<AimLayer>` block to
      Edge Linear: source "Edge Expo", trigger L2, threshold 100, source lightbar on. **Remove** the
      "Switch 2 Edge Expo" action from Edge Linear.
      - Repeat the same tests: the curve should change instantly and the lightbar should switch to
@@ -267,11 +274,11 @@ Tasks:
 
 ## 5. Decisions
 Made 2026-10-05:
-- A3 (quieter logging): **dropped**.
-- B5: **hand-editing guide only**; editor UI deferred.
+- Quieter per-press logging (formerly task A3): **dropped**. Keep the "using Profile" log line; it costs about one line per press and is useful evidence if switching misbehaves.
+- Task 3.5: **hand-editing guide only**; editor UI deferred.
 - Pushing: **yes**, to the user's fork (`fork` remote, `petemess95/DS4Windows`).
 
-Still open (ask the user once Part A passes Phase 3):
-- Offer Part A to `hbashton/DS4Windows` as a pull request? Recommended: upstream changes this area
+Still open (ask the user once Phase 2 passes the Phase 4 tests):
+- Offer the Phase 2 speed-up to `hbashton/DS4Windows` as a pull request? Recommended: upstream changes this area
   often, and a merged fix avoids redoing it every release. Leave this plan file out of that pull
   request.
