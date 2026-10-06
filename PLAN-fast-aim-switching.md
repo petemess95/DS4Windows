@@ -114,13 +114,24 @@ Deliverables, in order:
     `ProfileTests`, `TemporaryProfileIntentTests`, `ProfileSwitchInputContinuityTests`,
     `DS4StickProfileTransformTests`.
   - Record which tests already fail on clean `main`, so they aren't blamed on our changes later.
-- **0.2 (worker-standard): find how to run a local build on real hardware.**
-  - Releases bundle a hash-pinned `viiper.exe`; see `.github/workflows/release.yml` around lines 156–263.
-    The installed copy has `C:\Program Files\DS4Windows\VIIPER\viiper.exe`.
-  - Find a safe way to run the dev build (for example the RC4.6.6 portable zip with our
-    `DS4Windows.dll`/`.exe` swapped in, or whatever the runtime VIIPER check allows).
-  - Return the exact steps. Don't run anything that changes drivers, HidHide, or the installed copy.
-  - Steps must start with: close the installed DS4Windows, and back up `%APPDATA%\DS4Windows`.
+- **0.2 (already investigated): how to run a local build on real hardware.**
+  - DS4Windows only accepts the `viiper.exe` whose SHA-256 is compiled into it
+    (`ViiperSetupManager.SupportedViiperSha256`, `ViiperSetupManager.cs:170`, value `9392A49E…892B`).
+    The installed `C:\Program Files\DS4Windows\VIIPER\viiper.exe` matches it exactly (checked
+    2026-10-05). **Never change the VIIPER, USBip or HidHide constants or files on this branch.**
+  - The install is self-contained (its runtimeconfig has `includedFrameworks`), and nothing checks
+    the integrity of `DS4Windows.dll`.
+  - Test method: swap only `DS4Windows.dll`. The user, as admin:
+    1. Close DS4Windows.
+    2. Back up `%APPDATA%\DS4Windows` and `C:\Program Files\DS4Windows\DS4Windows.dll`.
+    3. Copy `DS4Windows\bin\x64\Release\net8.0-windows10.0.19041.0\DS4Windows.dll` over the
+       installed one.
+    4. Start DS4Windows.
+    5. To revert, restore the backed-up DLL.
+  - Don't run the build from `bin\`; it may offer VIIPER setup or repair, or clash with the running
+    VIIPER.
+  - After any upstream update, rebase the branch onto the new release before swapping the DLL again.
+    A DLL built from an older commit won't match the new VIIPER version or the new dependencies.
 
 ### Part A: cheap profile switching
 
