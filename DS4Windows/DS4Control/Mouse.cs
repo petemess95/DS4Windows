@@ -830,8 +830,8 @@ namespace DS4Windows
             }
         }
 
-        // Smoothing ring and One Euro filters for gyro mouse-joystick; the
-        // maths lives in GyroMouseStickMath.
+        // Smoothing ring, One Euro filters, ramp and dither carry for gyro
+        // mouse-joystick; the maths lives in GyroMouseStickMath.
         private GyroMouseStickFilterState gyroStickState;
 
         private void SixMouseReset(SixAxisEventArgs args)
@@ -862,8 +862,10 @@ namespace DS4Windows
             bool outputX = msinfo.OutputHorizontal();
             bool outputY = msinfo.OutputVertical();
 
+            // Mapped axes are legacy bytes except for HighRes; the byte form
+            // of TrySubmit makes the same FromLegacy conversion.
             postMap?.TrySubmit(postMapEpoch, msinfo.outputStick, outputX,
-                outputY, output.AxisX, output.AxisY, true, deviceNum);
+                outputY, output.MappedX, output.MappedY, true, deviceNum);
         }
 
         private void SixDirectionalSwipe(SixAxisEventArgs arg, GyroDirectionalSwipeInfo swipeInfo)

@@ -6,11 +6,13 @@ using Sensorit.Base;
 namespace DS4Windows
 {
     // Three-entry ring for the weighted-average smoothing. Inline so the
-    // state struct copies by value and holds no arrays.
+    // state struct copies by value and holds no arrays. Doubles so HighRes
+    // keeps fractions; Legacy only ever stores whole numbers, which a
+    // double holds exactly, so its sums are unchanged.
     [InlineArray(GyroMouseStickFilterState.SmoothBufferLength)]
     internal struct GyroMouseStickSmoothBuffer
     {
-        private int element0;
+        private double element0;
     }
 
     /// <summary>
@@ -31,6 +33,8 @@ namespace DS4Windows
             SmoothY = default;
             SmoothTail = 0;
             RampElapsedMs = 0.0;
+            DitherErrorX = 0.0;
+            DitherErrorY = 0.0;
         }
 
         // Borrowed from Mouse's filter pair: the profile's MinCutoff/Beta
@@ -44,6 +48,10 @@ namespace DS4Windows
         // Summed report time (ms) since gyro output switched on, for the
         // activation ramp. Cleared by Reset while output is off.
         internal double RampElapsedMs;
+        // Dither: quantisation error carried to the next report, per axis,
+        // always within +-0.5 of a byte step. Cleared by Reset.
+        internal double DitherErrorX;
+        internal double DitherErrorY;
     }
 
     internal readonly struct GyroMouseStickOutput
@@ -52,11 +60,27 @@ namespace DS4Windows
         {
             AxisX = axisX;
             AxisY = axisY;
+            MappedX = DS4MappedStickAxis.FromLegacy(axisX);
+            MappedY = DS4MappedStickAxis.FromLegacy(axisY);
         }
 
-        // Legacy byte stick values, 128 = centre.
+        internal GyroMouseStickOutput(in DS4MappedStickAxis mappedX,
+            in DS4MappedStickAxis mappedY)
+        {
+            AxisX = mappedX.LegacyValue;
+            AxisY = mappedY.LegacyValue;
+            MappedX = mappedX;
+            MappedY = mappedY;
+        }
+
+        // Byte stick values, 128 = centre. For HighRes this is the rounded
+        // compatibility value of MappedX/MappedY.
         internal byte AxisX { get; }
         internal byte AxisY { get; }
+        // What is submitted: legacy bytes for Legacy and Dither, a
+        // high-resolution axis for HighRes.
+        internal DS4MappedStickAxis MappedX { get; }
+        internal DS4MappedStickAxis MappedY { get; }
     }
 
     /// <summary>
@@ -65,6 +89,9 @@ namespace DS4Windows
     /// pinned by a frozen oracle; the caller reads settings and submits.
     /// New steps must sit behind an <c>if</c> on their own setting, so the
     /// defaults keep today's exact operations (and bytes).
+    /// The deltas are doubles: Legacy truncates them at each of its original
+    /// <c>int</c> steps through <see cref="LegacyInt"/>, while HighRes and
+    /// Dither keep the fractions.
     /// </summary>
     internal static class GyroMouseStickMath
     {
@@ -75,8 +102,9 @@ namespace DS4Windows
             in Switch2GyroTriggerModifierResult modifier,
             ref GyroMouseStickFilterState state)
         {
-            int deltaX = horizontalAxis == 0 ? gyroYawFull : gyroRollFull;
-            int deltaY = -gyroPitchFull;
+            bool legacy = msinfo.precision == GyroMouseStickInfo.PrecisionMode.Legacy;
+            double deltaX = horizontalAxis == 0 ? gyroYawFull : gyroRollFull;
+            double deltaY = -gyroPitchFull;
             int maxDirX = deltaX >= 0 ? 127 : -128;
             int maxDirY = deltaY >= 0 ? 127 : -128;
 
@@ -86,8 +114,13 @@ namespace DS4Windows
             int signX = Math.Sign(deltaX);
             int signY = Math.Sign(deltaY);
 
-            int deadzoneX = (int)Math.Abs(normX * msinfo.deadZone);
-            int deadzoneY = (int)Math.Abs(normY * msinfo.deadZone);
+            double deadzoneX = Math.Abs(normX * msinfo.deadZone);
+            double deadzoneY = Math.Abs(normY * msinfo.deadZone);
+            if (legacy)
+            {
+                deadzoneX = LegacyInt(deadzoneX);
+                deadzoneY = LegacyInt(deadzoneY);
+            }
 
             int maxValX = signX * msinfo.maxZone;
             int maxValY = signY * msinfo.maxZone;
@@ -128,22 +161,37 @@ namespace DS4Windows
                 if (length > 0.0 && length < msinfo.softDeadZone)
                 {
                     double softScale = length / msinfo.softDeadZone;
-                    deltaX = (int)(deltaX * softScale);
-                    deltaY = (int)(deltaY * softScale);
+                    deltaX *= softScale;
+                    deltaY *= softScale;
+                    if (legacy)
+                    {
+                        deltaX = LegacyInt(deltaX);
+                        deltaY = LegacyInt(deltaY);
+                    }
                 }
             }
 
             if (modifier.DeadzoneActive)
             {
-                deltaX = (int)Switch2GyroTriggerModifier.ApplySoftDeadzone(
+                deltaX = Switch2GyroTriggerModifier.ApplySoftDeadzone(
                     deltaX, normX, modifier.DeadzoneAmount);
-                deltaY = (int)Switch2GyroTriggerModifier.ApplySoftDeadzone(
+                deltaY = Switch2GyroTriggerModifier.ApplySoftDeadzone(
                     deltaY, normY, modifier.DeadzoneAmount);
+                if (legacy)
+                {
+                    deltaX = LegacyInt(deltaX);
+                    deltaY = LegacyInt(deltaY);
+                }
             }
-            deltaX = (int)Switch2GyroTriggerModifier.ApplyDampening(
+            deltaX = Switch2GyroTriggerModifier.ApplyDampening(
                 deltaX, modifier);
-            deltaY = (int)Switch2GyroTriggerModifier.ApplyDampening(
+            deltaY = Switch2GyroTriggerModifier.ApplyDampening(
                 deltaY, modifier);
+            if (legacy)
+            {
+                deltaX = LegacyInt(deltaX);
+                deltaY = LegacyInt(deltaY);
+            }
 
             if (msinfo.jitterCompensation)
             {
@@ -154,13 +202,15 @@ namespace DS4Windows
                 double absX = Math.Abs(deltaX);
                 if (absX <= normX * threshold)
                 {
-                    deltaX = (int)(signX * Math.Pow(absX / thresholdF, 1.408) * threshold);
+                    deltaX = signX * Math.Pow(absX / thresholdF, 1.408) * threshold;
+                    if (legacy) deltaX = LegacyInt(deltaX);
                 }
 
                 double absY = Math.Abs(deltaY);
                 if (absY <= normY * threshold)
                 {
-                    deltaY = (int)(signY * Math.Pow(absY / thresholdF, 1.408) * threshold);
+                    deltaY = signY * Math.Pow(absY / thresholdF, 1.408) * threshold;
+                    if (legacy) deltaY = LegacyInt(deltaY);
                 }
             }
 
@@ -169,8 +219,13 @@ namespace DS4Windows
                 if (msinfo.smoothingMethod == GyroMouseStickInfo.SmoothingMethod.OneEuro)
                 {
                     double currentRate = 1.0 / elapsed;
-                    deltaX = (int)(state.FilterX.Filter(deltaX, currentRate));
-                    deltaY = (int)(state.FilterY.Filter(deltaY, currentRate));
+                    deltaX = state.FilterX.Filter(deltaX, currentRate);
+                    deltaY = state.FilterY.Filter(deltaY, currentRate);
+                    if (legacy)
+                    {
+                        deltaX = LegacyInt(deltaX);
+                        deltaY = LegacyInt(deltaY);
+                    }
                 }
                 else if (msinfo.smoothingMethod == GyroMouseStickInfo.SmoothingMethod.WeightedAverage)
                 {
@@ -194,9 +249,14 @@ namespace DS4Windows
                     }
 
                     x_out /= finalWeight;
-                    deltaX = (int)x_out;
+                    deltaX = x_out;
                     y_out /= finalWeight;
-                    deltaY = (int)y_out;
+                    deltaY = y_out;
+                    if (legacy)
+                    {
+                        deltaX = LegacyInt(deltaX);
+                        deltaY = LegacyInt(deltaY);
+                    }
                 }
 
                 // Smoothing can flip a sign, so redo the per-direction limits.
@@ -209,7 +269,8 @@ namespace DS4Windows
             if (msinfo.vertScale != 100)
             {
                 double verticalScale = msinfo.vertScale * 0.01;
-                deltaY = (int)(deltaY * verticalScale);
+                deltaY *= verticalScale;
+                if (legacy) deltaY = LegacyInt(deltaY);
                 deltaY = (deltaY < 0 && deltaY < maxValY) ? maxValY :
                     (deltaY > 0 && deltaY > maxValY) ? maxValY : deltaY;
             }
@@ -282,15 +343,65 @@ namespace DS4Windows
                 }
             }
 
-            byte axisXOut = (byte)(xNorm * maxDirX + 128.0);
-            byte axisYOut = (byte)(yNorm * maxDirY + 128.0);
-            return new GyroMouseStickOutput(axisXOut, axisYOut);
+            if (legacy)
+            {
+                byte axisXOut = (byte)(xNorm * maxDirX + 128.0);
+                byte axisYOut = (byte)(yNorm * maxDirY + 128.0);
+                return new GyroMouseStickOutput(axisXOut, axisYOut);
+            }
+
+            // The exact stick coordinate (0..255, 128 = centre) before any
+            // quantisation; the clamp only guards bad settings (maxZone 0).
+            double coordX = ExactCoordinate(xNorm, maxDirX);
+            double coordY = ExactCoordinate(yNorm, maxDirY);
+            if (msinfo.precision == GyroMouseStickInfo.PrecisionMode.Dither)
+            {
+                return new GyroMouseStickOutput(
+                    DitherAxis(coordX, ref state.DitherErrorX),
+                    DitherAxis(coordY, ref state.DitherErrorY));
+            }
+
+            DS4MappedStickAxis.TryFromProfileCoordinate(coordX, out var mappedX);
+            DS4MappedStickAxis.TryFromProfileCoordinate(coordY, out var mappedY);
+            return new GyroMouseStickOutput(mappedX, mappedY);
+        }
+
+        // The original int cast, kept as a double. Not Math.Truncate: that
+        // keeps -0.0, which the old int path never fed to the filters.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static double LegacyInt(double value) => (int)value;
+
+        private static double ExactCoordinate(double norm, int maxDir)
+        {
+            double coordinate = norm * maxDir + 128.0;
+            return double.IsNaN(coordinate) ? 128.0 :
+                Math.Clamp(coordinate, 0.0, 255.0);
+        }
+
+        // Error diffusion to a byte: carry the rounding error into the next
+        // report, so the average equals the exact value and each byte is
+        // within one step of it. An exact centre (gyro still) outputs 128 and
+        // drops the carry, so a leftover error can never drift the stick.
+        internal static byte DitherAxis(double coordinate, ref double error)
+        {
+            if (coordinate == 128.0)
+            {
+                error = 0.0;
+                return 128;
+            }
+
+            double target = coordinate + error;
+            double quantized = Math.Clamp(
+                Math.Round(target, MidpointRounding.AwayFromZero), 0.0, 255.0);
+            error = target - quantized;
+            return (byte)quantized;
         }
 
         // Runs on reports while gyro output is off: pushes a zero into the
         // smoothing ring and, for One Euro, into both filters so they decay
         // instead of resuming from a stale value. Also restarts the
-        // activation ramp for the next time output switches on.
+        // activation ramp and clears the dither carry for the next time
+        // output switches on.
         internal static void Reset(double elapsed, GyroMouseStickInfo msinfo,
             ref GyroMouseStickFilterState state)
         {
@@ -299,6 +410,8 @@ namespace DS4Windows
             state.SmoothY[iIndex] = 0;
             state.SmoothTail = iIndex + 1;
             state.RampElapsedMs = 0.0;
+            state.DitherErrorX = 0.0;
+            state.DitherErrorY = 0.0;
 
             if (msinfo.smoothingMethod == GyroMouseStickInfo.SmoothingMethod.OneEuro)
             {

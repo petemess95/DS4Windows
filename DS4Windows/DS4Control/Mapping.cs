@@ -433,7 +433,9 @@ namespace DS4Windows
             private bool exhausted;
             private bool pending;
             private DS4MappedStickAxis lx, ly, rx, ry;
-            private byte currentGyroX = 128, currentGyroY = 128;
+            // Default is a legacy centre (128). Kept as mapped axes so a
+            // high-resolution gyro value survives re-application.
+            private DS4MappedStickAxis currentGyroX, currentGyroY;
 
             // Compatibility accessors are individually synchronized. Producers
             // must use TrySubmit for atomic comparison/publication of a vector.
@@ -457,7 +459,7 @@ namespace DS4Windows
                 lock (gate)
                 {
                     ResetPendingNoLock();
-                    SetGyroNoLock(128, 128, device);
+                    SetGyroNoLock(default, default, device);
                     if (epoch == long.MaxValue) exhausted = true;
                     else Volatile.Write(ref epoch, epoch + 1);
                 }
@@ -465,14 +467,24 @@ namespace DS4Windows
 
             internal bool TrySubmit(long capturedEpoch,
                 GyroMouseStickInfo.OutputStick target, bool outputX, bool outputY,
-                byte x, byte y, bool updateGyro, int device = -1)
+                byte x, byte y, bool updateGyro, int device = -1) =>
+                TrySubmit(capturedEpoch, target, outputX, outputY,
+                    DS4MappedStickAxis.FromLegacy(x), DS4MappedStickAxis.FromLegacy(y),
+                    updateGyro, device);
+
+            // Typed form: gyro HighRes submits high-resolution axes here.
+            // Same admission and merge as the byte form.
+            internal bool TrySubmit(long capturedEpoch,
+                GyroMouseStickInfo.OutputStick target, bool outputX, bool outputY,
+                in DS4MappedStickAxis x, in DS4MappedStickAxis y, bool updateGyro,
+                int device = -1)
             {
                 lock (gate)
                 {
                     if (exhausted || capturedEpoch != epoch) return false;
                     if (updateGyro)
-                        SetGyroNoLock(outputX ? x : (byte)128,
-                            outputY ? y : (byte)128, device);
+                        SetGyroNoLock(outputX ? x : default,
+                            outputY ? y : default, device);
                     MergePendingNoLock(target, outputX, outputY, x, y);
                     return true;
                 }
@@ -483,26 +495,29 @@ namespace DS4Windows
                 lock (gate)
                 {
                     if (exhausted || capturedEpoch != epoch) return false;
-                    SetGyroNoLock(128, 128, device);
+                    SetGyroNoLock(default, default, device);
                     return true;
                 }
             }
 
-            private void SetGyroNoLock(byte x, byte y, int device)
+            private void SetGyroNoLock(in DS4MappedStickAxis x,
+                in DS4MappedStickAxis y, int device)
             {
                 currentGyroX = x;
                 currentGyroY = y;
                 // Legacy public arrays are diagnostic compatibility mirrors,
                 // never an authoritative production read/modify/write store.
+                // They hold the rounded byte of a high-resolution value.
                 if ((uint)device < (uint)gyroStickX.Length)
                 {
-                    gyroStickX[device] = x;
-                    gyroStickY[device] = y;
+                    gyroStickX[device] = x.LegacyValue;
+                    gyroStickY[device] = y.LegacyValue;
                 }
             }
 
             private void MergePendingNoLock(GyroMouseStickInfo.OutputStick target,
-                bool outputX, bool outputY, byte x, byte y)
+                bool outputX, bool outputY, in DS4MappedStickAxis x,
+                in DS4MappedStickAxis y)
             {
                 if (target == GyroMouseStickInfo.OutputStick.LeftStick)
                 {
@@ -516,9 +531,9 @@ namespace DS4Windows
                 }
             }
 
-            private void MergeAxisNoLock(ref DS4MappedStickAxis axis, byte value)
+            private void MergeAxisNoLock(ref DS4MappedStickAxis axis,
+                in DS4MappedStickAxis candidate)
             {
-                var candidate = DS4MappedStickAxis.FromLegacy(value);
                 if (Math.Abs(candidate.ProfileCoordinate - 128.0) >
                     Math.Abs(axis.ProfileCoordinate - 128.0))
                 {
@@ -546,8 +561,8 @@ namespace DS4Windows
                 lock (gate)
                 {
                     if (exhausted || capturedEpoch != epoch) return false;
-                    var x = DS4MappedStickAxis.FromLegacy(currentGyroX);
-                    var y = DS4MappedStickAxis.FromLegacy(currentGyroY);
+                    DS4MappedStickAxis x = currentGyroX;
+                    DS4MappedStickAxis y = currentGyroY;
                     if (target == GyroMouseStickInfo.OutputStick.LeftStick)
                     {
                         if (outputX) mappedState.LXAxis = DS4MappedStickAxis.SelectStronger(mappedState.LXAxis, x);
