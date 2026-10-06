@@ -140,8 +140,10 @@ namespace DS4Windows
 
     /// <summary>
     /// The layers a device uses right now: every layer that built, in file
-    /// (priority) order, never empty. Immutable and published as one
-    /// reference, so the input thread sees one consistent set per report.
+    /// (priority) order, never empty and at most MAX_AIM_LAYERS. Immutable
+    /// and published as one reference, so the input thread sees one
+    /// consistent set per report. Each publish uses a new reference, which is
+    /// what restarts the hold timers.
     /// </summary>
     internal sealed class AimLayerSet
     {
@@ -164,6 +166,10 @@ namespace DS4Windows
             }
             if (count == 0)
                 return null;
+            // The per-slot hold timers have one entry per layer.
+            if (count > BackingStore.MAX_AIM_LAYERS)
+                throw new ArgumentException(
+                    $"At most {BackingStore.MAX_AIM_LAYERS} layers are allowed.", nameof(built));
 
             var layers = new AimLayerStickSettings[count];
             count = 0;
@@ -175,8 +181,12 @@ namespace DS4Windows
             return new AimLayerSet(layers);
         }
 
-        // First layer (file order) whose raw trigger is held; null = none.
-        // Lock- and allocation-free.
+        // Same layers under a new reference, so publishing it restarts the
+        // hold timers even when nothing was rebuilt (resume, re-apply).
+        internal AimLayerSet Renewed() => new(layers);
+
+        // First layer (file order) whose raw trigger is held, ignoring
+        // Delay; null = none. Lock- and allocation-free.
         internal AimLayerStickSettings FirstHeld(byte l2, byte r2)
         {
             AimLayerStickSettings[] items = layers;
@@ -298,10 +308,21 @@ namespace DS4Windows
         // Last "too many blocks" warning per slot, same reason.
         private static readonly string[] lastCapWarning =
             new string[Global.TEST_PROFILE_ITEM_COUNT];
-        // Layer on (trigger held) as last decided by SetCurveAndDeadzone, so
-        // the lightbar follows the exact state the stick used (joined and
+        // Active layer as last decided by SetCurveAndDeadzone (null = base),
+        // so the lightbar follows the exact state the stick used (joined and
         // copied input states included) without re-reading triggers.
-        private static readonly bool[] held = new bool[Global.TEST_PROFILE_ITEM_COUNT];
+        private static readonly AimLayerStickSettings[] active =
+            new AimLayerStickSettings[Global.TEST_PROFILE_ITEM_COUNT];
+        // Hold timers, per slot and per position in the set: the report time
+        // (ms) the layer's trigger went above its threshold, or NotHeld.
+        // Only the thread calling SetCurveAndDeadzone for that slot touches
+        // these and lastSeen (input thread for live slots, readings preview
+        // for the editor slot), so they need no locks.
+        private const long NotHeld = long.MinValue;
+        private static readonly long[][] heldSince = CreateHeldSince();
+        // The set the timers belong to; a different published set resets them.
+        private static readonly AimLayerSet[] lastSeen =
+            new AimLayerSet[Global.TEST_PROFILE_ITEM_COUNT];
         private static long saveSequence;
 
         private static Entry[] CreateEntries()
@@ -320,28 +341,88 @@ namespace DS4Windows
             return result;
         }
 
+        private static long[][] CreateHeldSince()
+        {
+            var result = new long[Global.TEST_PROFILE_ITEM_COUNT][];
+            for (int index = 0; index < result.Length; index++)
+            {
+                result[index] = new long[BackingStore.MAX_AIM_LAYERS];
+                Array.Fill(result[index], NotHeld);
+            }
+            return result;
+        }
+
         /// <summary>Null = no layer. Lock- and allocation-free.</summary>
         internal static AimLayerSet Current(int device) =>
             Volatile.Read(ref published[device]);
 
-        // Input thread, once per report. Lock- and allocation-free.
-        internal static void SetHeld(int device, bool on) =>
-            Volatile.Write(ref held[device], on);
+        /// <summary>
+        /// Input thread, once per report while a set is published
+        /// (<paramref name="layers"/> = <see cref="Current"/>, not null).
+        /// Updates every layer's hold timer from the raw triggers and returns
+        /// the active layer: the first in file order whose trigger is held and
+        /// has been for at least its Delay; null = base profile. Lock- and
+        /// allocation-free.
+        /// </summary>
+        internal static AimLayerStickSettings Select(int device, AimLayerSet layers,
+            byte l2, byte r2, long nowMs)
+        {
+            long[] since = heldSince[device];
+            if (!ReferenceEquals(layers, lastSeen[device]))
+            {
+                // New set (apply, clear, suspend/resume, rebuild): every timer
+                // starts again; a trigger already held counts from this report.
+                for (int index = 0; index < since.Length; index++)
+                    since[index] = NotHeld;
+                lastSeen[device] = layers;
+            }
 
-        internal static bool IsHeld(int device) => Volatile.Read(ref held[device]);
+            AimLayerStickSettings result = null;
+            int count = layers.Count;
+            // No early exit: a lower-priority layer's timer keeps running
+            // while a higher one is active (R2 held under L2).
+            for (int index = 0; index < count; index++)
+            {
+                AimLayerStickSettings layer = layers[index];
+                if (!layer.IsTriggerHeld(l2, r2))
+                {
+                    since[index] = NotHeld;
+                    continue;
+                }
+                if (since[index] == NotHeld)
+                    since[index] = nowMs;
+                if (result == null && nowMs - since[index] >= layer.Delay)
+                    result = layer;
+            }
+
+            Volatile.Write(ref active[device], result);
+            return result;
+        }
+
+        // Last active layer; null = base. Only meaningful while a set is
+        // published (see MainLightbarColor).
+        internal static AimLayerStickSettings Active(int device) =>
+            Volatile.Read(ref active[device]);
+
+        // Test seam: forget the last decision and the timers. Not safe while
+        // SetCurveAndDeadzone runs for the same slot.
+        internal static void ResetSelectionForTests(int device)
+        {
+            Volatile.Write(ref active[device], null);
+            lastSeen[device] = null;
+            Array.Fill(heldSince[device], NotHeld);
+        }
 
         // Lightbar: the colour to show where the plain main colour would be.
-        // Only swaps when a layer is published, wants its source colour and
-        // is held; otherwise returns baseColor. Interim for several layers:
-        // the held flag does not say which layer, so the first is used (the
-        // same as before for one layer); Task 5.2 hands over the active layer.
+        // Only swaps when a set is published and its active layer wants its
+        // source colour; otherwise returns baseColor. A null set wins over a
+        // stale active layer.
         internal static DS4Color MainLightbarColor(int device, DS4Color baseColor)
         {
-            AimLayerSet layers = Current(device);
-            if (layers == null || !IsHeld(device))
+            if (Current(device) == null)
                 return baseColor;
-            AimLayerStickSettings layer = layers[0];
-            return layer.UseSourceLightbar ? layer.LightbarColor : baseColor;
+            AimLayerStickSettings layer = Active(device);
+            return layer != null && layer.UseSourceLightbar ? layer.LightbarColor : baseColor;
         }
 
         internal static long ReadSaveSequence() => Interlocked.Read(ref saveSequence);
@@ -446,9 +527,12 @@ namespace DS4Windows
                 Entry entry = entries[device];
                 entry.Requests = preparation?.CopyRequests();
                 entry.Built = preparation?.CopyBuilt();
-                entry.Set = preparation?.Set;
+                // New reference even for a re-applied preparation, so the
+                // hold timers restart.
+                entry.Set = preparation?.Set?.Renewed();
                 entry.Suspended = false;
                 entry.Generation++;
+                Volatile.Write(ref active[device], null);
                 Volatile.Write(ref published[device], entry.Set);
                 stale = entry.Requests != null &&
                     preparation.SaveSequence != ReadSaveSequence();
@@ -471,6 +555,7 @@ namespace DS4Windows
                 entry.Set = null;
                 entry.Suspended = false;
                 entry.Generation++;
+                Volatile.Write(ref active[device], null);
                 Volatile.Write(ref published[device], null);
             }
         }
@@ -483,6 +568,7 @@ namespace DS4Windows
             lock (entries[device])
             {
                 entries[device].Suspended = true;
+                Volatile.Write(ref active[device], null);
                 Volatile.Write(ref published[device], null);
             }
         }
@@ -493,6 +579,9 @@ namespace DS4Windows
             {
                 Entry entry = entries[device];
                 entry.Suspended = false;
+                // Same layers, new reference: the hold timers restart.
+                entry.Set = entry.Set?.Renewed();
+                Volatile.Write(ref active[device], null);
                 Volatile.Write(ref published[device], entry.Set);
             }
         }

@@ -2075,14 +2075,23 @@ namespace DS4Windows
 
         internal static DS4State SetCurveAndDeadzone(int device, DS4State cState, DS4State dState,
             object sourceOwner)
+            => SetCurveAndDeadzone(device, cState, dState, sourceOwner,
+                (long)(Stopwatch.GetTimestamp() * stickFilterMillisecondsPerTick));
+
+        // nowMs: this report's Stopwatch time in milliseconds, read once and
+        // shared by the aim-layer hold timers and the stick filters. Tests
+        // pass a fixed clock here.
+        internal static DS4State SetCurveAndDeadzone(int device, DS4State cState, DS4State dState,
+            object sourceOwner, long nowMs)
         {
             // Aim layers: one volatile read; null (no layer) keeps every base
             // read below. Decided from the raw triggers, before cState is
-            // replaced: the first held layer in file order. The borrowed
-            // settings are shared and read-only.
+            // replaced: the first layer in file order that is held and past
+            // its delay. The borrowed settings are shared and read-only.
             AimLayerSet aimLayers = AimLayerState.Current(device);
-            AimLayerStickSettings aimLayer = aimLayers?.FirstHeld(cState.L2, cState.R2);
-            AimLayerState.SetHeld(device, aimLayer != null);
+            AimLayerStickSettings aimLayer = null;
+            if (aimLayers != null)
+                aimLayer = AimLayerState.Select(device, aimLayers, cState.L2, cState.R2, nowMs);
 
             double rotation = /*tempDoubleArray[device] =*/  getLSRotation(device);
             double rotationRS = /*tempDoubleArray[device] =*/ getRSRotation(device);
@@ -2097,7 +2106,7 @@ namespace DS4Windows
             StickAntiSnapbackInfo lsAntiSnapback = GetLSAntiSnapbackInfo(device);
             StickAntiSnapbackInfo rsAntiSnapback = GetRSAntiSnapbackInfo(device);
 
-            long filterTimestamp = (long)(Stopwatch.GetTimestamp() * stickFilterMillisecondsPerTick);
+            long filterTimestamp = nowMs;
             filters.Left.ApplySnapback(lsAntiSnapback.enabled, lsAntiSnapback.delta,
                 lsAntiSnapback.timeout, filterTimestamp, ref cState.LXAxis, ref cState.LYAxis);
             filters.Right.ApplySnapback(rsAntiSnapback.enabled, rsAntiSnapback.delta,
