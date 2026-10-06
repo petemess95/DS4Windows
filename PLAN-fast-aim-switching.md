@@ -199,6 +199,19 @@ Do the phases in order. Tasks are numbered `<phase>.<step>`.
   - Grep for any other `new XmlSerializer(` that passes `XmlAttributeOverrides` and treat it the same way.
   - Acceptance: a test shows repeated `TryPrepare` calls no longer increase the loaded-assembly
     count. Average warm `TryPrepare` drops by about 80 ms. Baseline tests are no worse than in 1.1.
+  - **Done 2026-10-05.** `ProfileDTO.Serializer` (internal, `Lazy<XmlSerializer>`,
+    `ExecutionAndPublication`) is used at `PreparedProfileLoad.cs:88` and in `SaveProfileNew`.
+    - Grep found no other production `new XmlSerializer(` with overrides; the rest are plain
+      `XmlSerializer(Type)`, which .NET caches. No call site attaches `Unknown*` events, so sharing is safe.
+      About 30 test files still build their own serializer with overrides; that only costs test time.
+    - New tests (`ProfileSerializerCacheTests`, regular suite): the same instance is returned each
+      time, and 20 repeated `TryPrepare` calls leave the assembly count unchanged.
+    - Benchmark: warm `TryPrepare` **0.90–0.93 ms** wall (was ~105 ms); assemblies 182 → 182 over 45
+      calls (was +1 per call). The first profile load or save in a process still pays ~100 ms once.
+    - Tests: baseline classes + new class 91/91; full suite with `TestCategory!=Benchmark`
+      **7132 pass, 12 expected skips, 0 fail**.
+    - Note: a full rebuild reports 12 warnings, which also appear without these changes and are in
+      untouched files (1.1's "0 warnings" was likely an incremental build).
 - **2.3 (worker-complex): cache prepared profiles.**
   - Cache per full path, keyed on `(LastWriteTimeUtc, Length)`. Store the text after migration, the
     `Migrated` flag, and a "passed validation" flag.
