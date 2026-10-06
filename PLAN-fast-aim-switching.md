@@ -2,9 +2,9 @@
 
 Written 2026-10-05.
 
-**Status (2026-10-05):** Phases 1 and 2 are done (results under Tasks 1.1, 2.1 and 2.2; Task 2.3 was
-dropped, see its note). The next step is **Phase 3, starting at Task 3.1**. The kickoff message for
-that session is under "Next session" at the end of this file.
+**Status (2026-10-05):** Phases 1, 2 and 3 are done (results under Tasks 1.1, 2.1, 2.2 and 3.1–3.5;
+Task 2.3 was dropped, see its note). The next step is **Phase 4, starting at Task 4.1**. The kickoff
+message for that session is under "Next session" at the end of this file.
 
 ---
 
@@ -119,8 +119,8 @@ Deliverables, in order:
 |---|---|---|---|
 | 1. Setup | Baseline build and tests; how to test on hardware | 1.1, 1.2 | Done 2026-10-05 |
 | 2. Faster profile switching | Cut each switch from ~150 ms to a few ms; stop the leak | 2.1–2.3 | Done 2026-10-05 (2.3 dropped; warm `TryPrepare` ~105 ms → ~0.9 ms) |
-| 3. Aim layer | Swap right-stick settings while L2 is held, with no profile switch | 3.1–3.5 | Next |
-| 4. Testing | Full test run, then you test on the controller | 4.1, 4.2 | Not started |
+| 3. Aim layer | Swap right-stick settings while L2 is held, with no profile switch | 3.1–3.5 | Done 2026-10-05 (`749f3d8`…`c2db58a`; guide in `docs/aim-layer.md`) |
+| 4. Testing | Full test run, then you test on the controller | 4.1, 4.2 | Next |
 
 Do the phases in order. Tasks are numbered `<phase>.<step>`.
 
@@ -242,10 +242,11 @@ Design decisions (already made):
   Expo", and borrows its right-stick settings. The user keeps editing curves in the normal profile
   editor, so no curve-editing UI is needed.
 - **What gets swapped:** the right stick's `StickDeadZoneInfo` (dead zone, anti-dead zone, max zone,
-  max output, fuzz, dead-zone type, and so on), the RS sensitivity, the square-stick RS mode and
+  max output, dead-zone type, and so on), the RS sensitivity, the square-stick RS mode and
   roundness, the RS output-curve mode, and the RS bezier curve.
-- **What does not get swapped:** RS rotation, anti-snapback and calibration. They feed filters that
-  keep state between reports, so switching them mid-stream could make the stick jump.
+- **What does not get swapped:** RS rotation, anti-snapback, calibration and (decided in 3.3) the RS
+  fuzz value. They feed filters that keep state between reports, so switching them mid-stream could
+  make the stick jump.
 - **When the layer is on:** decided from the **raw** `cState.L2` captured at the top of
   `SetCurveAndDeadzone`, *before* `cState` is reassigned at `Mapping.cs:2107`. The default threshold
   matches today's special-action L2 trigger (`> 100`, confirm in `getBoolSpecialActionMapping`), so
@@ -469,10 +470,15 @@ Tasks:
 
 ### Phase 4: Testing
 - **4.1 (orchestrator):**
-  - Run the full test suite and compare with the 1.1 baseline.
+  - Run the full test suite and compare with the 1.1 baseline. After Phase 3 (`c2db58a`) the full
+    suite with `--filter "TestCategory!=Benchmark"` gives **7181 pass, 12 expected skips, 0 fail**
+    (7132 + 49 `AimLayer*` tests). The 1.1 baseline filter now also matches `AimLayerProfileTests`
+    (`~ProfileTests` is a substring match); add `&FullyQualifiedName!~AimLayer` to get the 91.
   - Re-run the 2.1 benchmark and record the before and after numbers in the commit message or PR text.
 - **4.2 (the user, on hardware, using the steps from 1.2):**
-  1. **Phase 2 alone.** Keep the existing "Switch 2 Edge Expo" action.
+  1. **Phase 2 alone.** Keep the existing "Switch 2 Edge Expo" action. The DLL already contains
+     Phase 3, but the layer stays off until a profile has an `<AimLayer>` block, so this step
+     still tests Phase 2 only.
      - Rapid L2 taps (under 150 ms), holds of 1–2 s, and alternating quickly for 30 s.
      - In Task Manager, DS4Windows CPU should stay near idle.
      - The log should show one line per press.
@@ -498,18 +504,20 @@ Still open (ask the user once Phase 2 passes the Phase 4 tests):
 
 ## 6. Next session
 
-Paste this to start Phase 3:
+Paste this to start Phase 4:
 
-> Read `PLAN-fast-aim-switching.md` in `P:\codex\DS4Windows Branch` and implement Phase 3
-> (Tasks 3.1, 3.2, 3.3, 3.4, 3.5, in that order). Phases 1 and 2 are done: Phase 2 cut warm
-> `TryPrepare` from ~105 ms to ~0.9 ms and stopped the assembly leak (Task 2.3 was dropped; see its
-> note). The current baseline is under Task 2.2: the six baseline classes plus
-> `ProfileSerializerCacheTests` give 91 pass, and the full suite with `--filter "TestCategory!=Benchmark"`
-> gives 7132 pass, 12 expected skips, 0 fail.
+> Read `PLAN-fast-aim-switching.md` in `P:\codex\DS4Windows Branch` and do Phase 4. Phases 1–3 are
+> done: Phase 2 cut warm `TryPrepare` from ~105 ms to ~0.9 ms and stopped the assembly leak; Phase 3
+> added the per-profile aim layer (Tasks 3.1–3.5, commits `749f3d8`…`c2db58a`, guide in
+> `docs/aim-layer.md`). The current baseline is under Task 4.1: the full suite with
+> `--filter "TestCategory!=Benchmark"` gives 7181 pass, 12 expected skips, 0 fail.
 >
-> Orchestrate it, and use mainly worker-complex and worker-standard agents. This work is too
-> sensitive to use the Sonnet workers for all but the most menial tasks.
+> Do Task 4.1 yourself: run the full suite, re-run the 2.1 benchmark, and record the before and
+> after numbers. Then build the Release DLL and walk me through Task 4.2 on the controller, using
+> the DLL-swap steps in Task 1.2 (I do the swap as admin; never touch my real `%APPDATA%\DS4Windows`
+> files yourself). If anything needs fixing, orchestrate it with mainly worker-complex and
+> worker-standard agents; this work is too sensitive for the Sonnet workers except the most menial
+> tasks. Commit after each fix that passes its tests.
 >
-> Commit after each task that passes its acceptance criteria. Once Phase 3 is complete, stop, make
-> sure all documentation is updated (including the status table), and write a handoff message like
-> this one for Phase 4.
+> Once Phase 4 is done, update the plan (status table and results), and ask me the open question in
+> section 5 about offering the Phase 2 speed-up upstream.
