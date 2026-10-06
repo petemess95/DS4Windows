@@ -5,8 +5,8 @@ Written 2026-10-05.
 **Status (2026-10-06):** Phases 1–4 are done (results under Tasks 1.1, 2.1, 2.2, 3.1–3.5, 4.1 and
 4.2; Task 2.3 was dropped, see its note). Phase 2 and the aim layer both passed on the user's DualSense
 Edge. The upstream pull request branch is prepared (section 5). **Phase 5 (hipfire layer) is done**, including the
-5.5 hardware test. **Phase 6 (better gyro aiming while aiming down sights): Tasks 6.1–6.4 done; 6.5 suite done,
-waiting for the user's quick check before 6.6.**
+5.5 hardware test. **Phase 6 (better gyro aiming while aiming down sights): Tasks 6.1–6.4 done; the 6.5 quick check
+failed and the user put Phase 6 on hold (2026-10-06); see the 6.5 note.**
 
 ---
 
@@ -125,7 +125,7 @@ Deliverables, in order:
 | 3. Aim layer | Swap right-stick settings while L2 is held, with no profile switch | 3.1–3.5 | Done 2026-10-05 (`749f3d8`…`c2db58a`; guide in `docs/aim-layer.md`) |
 | 4. Testing | Full test run, then you test on the controller | 4.1, 4.2 | Done 2026-10-06 (all pass; no fixes needed) |
 | 5. Hipfire layer | Several aim layers per profile, first match wins, with an optional hold delay (R2 → Edge Hipfire after 100 ms, L2 still wins) | 5.1–5.5 | Done 2026-10-06 (`9da1d4b`, `0ece443`, `e321d2f`; 5.5 passed on hardware) |
-| 6. Gyro aiming | Better gyro-to-stick for small corrections while aiming; every change off by default and byte-identical when off | 6.1–6.9 | 6.1–6.4 done 2026-10-06 (`61d190c`…`92079cc`); 6.5 waiting for the user's check |
+| 6. Gyro aiming | Better gyro-to-stick for small corrections while aiming; every change off by default and byte-identical when off | 6.1–6.9 | **On hold** 2026-10-06: 6.1–6.4 done (`61d190c`…`92079cc`); 6.5 check failed (see its note) |
 
 Do the phases in order. Tasks are numbered `<phase>.<step>`.
 
@@ -823,7 +823,22 @@ invert → output (Legacy byte / high-resolution / dithered byte).
   - **Suite done 2026-10-06 at `92079cc`:** `TestCategory!=Benchmark` **7296 pass, 12 expected skips, 0 fail**
     (1 m 35 s). DLL `DS4Windows\bin\x64\Release\net8.0-windows10.0.19041.0\DS4Windows.dll`, 11,023,872 bytes,
     SHA-256 `f7f001f7783491e48a523e83eaa3e0101af5d7740aa943179b1baf3a0730b15e`.
-  - **Quick check by the user (pending):** DLL-swap method from 1.2, elevated copy. Back up `Profiles\` first.
+  - **Quick check by the user: failed 2026-10-06; Phase 6 on hold at the user's request.**
+    - Result: the baseline (defaults, step 2) felt "pretty bad"; after step 3 the output was erratic and could
+      not be held still in any position. Not recorded which round (a/b/c) it started in.
+    - Cause (orchestrator's analysis, code works as specified; the plan was wrong): with `DeadZone 0` the
+      sensor's constant noise (a few counts) is never zero. The soft deadzone only shrinks it, and the 40%
+      anti-deadzone (`Minimum X/Y`) turns any non-zero value into a ~36–40% push, in a random direction, every
+      report. Dither keeps the fractions Legacy truncated to 0, and the game curve boosts small ratios, so both
+      make it worse. The 40% anti-deadzone is probably also why the baseline is bad for small corrections.
+    - If resumed, redesign first: (1) the soft deadzone must scale the final output *including* the
+      anti-deadzone, plus a small hard floor so noise is exactly zero; (2) tune the anti-deadzone to the game's
+      real stick deadzone (ask which game); (3) re-test one change at a time from a known-good state, Dither
+      alone with `DeadZone 30` first. Don't start 6.6 before this.
+    - The user was given the command to restore `Edge Linear.xml` from `Profiles-phase6`. The installed DLL is the `92079cc` build
+      (identical behaviour with defaults); the Phase 5 DLL is backed up as
+      `%USERPROFILE%\DS4W-backup-2026-10-06\DS4Windows.dll.phase5`.
+  - Steps given to the user: DLL-swap method from 1.2, elevated copy. Back up `Profiles\` first.
     1. Regression: profiles as they are; hipfire/ADS curves and lightbar behave exactly as after 5.5.
     2. In DS4Windows, set Edge Linear's gyro output to Mouse-Joystick, trigger L2, save. ADS and make small
        corrections; note the baseline feel.
@@ -889,8 +904,6 @@ opens the PR from the GitHub compare page with the prefilled title/body. Origina
 
 ## 6. Next session
 
-Phase 6 Tasks 6.1–6.4 are done; 6.5's suite passed and the user's quick check (under 6.5) is pending. Kickoff
-message, once the check passes:
-
-> Phase 6 quick check passed. Continue Phase 6 of `PLAN-fast-aim-switching.md` from Task 6.6, as
-> orchestrator. Ask me the 6.7 decision when 6.6 is done.
+**Phase 6 is on hold** (user, 2026-10-06). Tasks 6.1–6.4 are built, pushed and off by default; the 6.5
+hardware check failed (see the note under 6.5). Nothing is scheduled. If the user resumes it, start with the
+redesign listed under 6.5, not 6.6.
