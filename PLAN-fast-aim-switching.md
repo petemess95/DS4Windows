@@ -2,9 +2,10 @@
 
 Written 2026-10-05.
 
-**Status (2026-10-06):** All four phases are done (results under Tasks 1.1, 2.1, 2.2, 3.1–3.5, 4.1 and
+**Status (2026-10-06):** Phases 1–4 are done (results under Tasks 1.1, 2.1, 2.2, 3.1–3.5, 4.1 and
 4.2; Task 2.3 was dropped, see its note). Phase 2 and the aim layer both passed on the user's DualSense
-Edge. Remaining: the open upstream question in section 5.
+Edge. The upstream pull request branch is prepared (section 5). **Phase 5 (hipfire layer) is planned
+and not started.**
 
 ---
 
@@ -122,6 +123,7 @@ Deliverables, in order:
 | 2. Faster profile switching | Cut each switch from ~150 ms to a few ms; stop the leak | 2.1–2.3 | Done 2026-10-05 (2.3 dropped; warm `TryPrepare` ~105 ms → ~0.9 ms) |
 | 3. Aim layer | Swap right-stick settings while L2 is held, with no profile switch | 3.1–3.5 | Done 2026-10-05 (`749f3d8`…`c2db58a`; guide in `docs/aim-layer.md`) |
 | 4. Testing | Full test run, then you test on the controller | 4.1, 4.2 | Done 2026-10-06 (all pass; no fixes needed) |
+| 5. Hipfire layer | Several aim layers per profile, first match wins, with an optional hold delay (R2 → Edge Hipfire after 100 ms, L2 still wins) | 5.1–5.5 | Planned 2026-10-06 |
 
 Do the phases in order. Tasks are numbered `<phase>.<step>`.
 
@@ -531,6 +533,146 @@ Tasks:
       changes on L2 (custom colour off). Log: no aim-layer warning and no per-press profile lines.
     - User's backups: `%USERPROFILE%\DS4W-backup-2026-10-05` (original DLL + `%APPDATA%\DS4Windows` copy).
 
+### Phase 5: Hipfire layer (R2 without L2, after a hold delay)
+
+**Goal (user, 2026-10-06).** Linear right stick for movement and shotgun fights; a mild curve while
+spraying from the hip; the existing stronger curve while aiming.
+
+| Held (raw triggers) | Right stick uses |
+|---|---|
+| Nothing, or R2 for under 100 ms | Edge Linear (base) |
+| R2 for 100 ms or more, L2 not held | **Edge Hipfire** (new) |
+| L2, with or without R2 | Edge Expo (existing layer) |
+
+**The user's profiles (read 2026-10-06, read-only).** `Edge Hipfire.xml` is a copy of `Edge Linear.xml`
+except `RSOutputCurveMode custom` and `RSOutputCurveCustom 0.3, 0.11, 1.00, 1.00`. Edge Expo is now
+`0.72, 0.26`, colour `0,255,0`. Hipfire still has Edge Linear's blue `0,0,255` colour and a copy of Linear's
+`<AimLayer>` block; the block does no harm in a source profile (only RS settings are borrowed). Nothing in
+`Actions.xml` uses R2.
+
+**Decisions (user, 2026-10-06).**
+- **L2 released while R2 is still held:** if R2 has already been held 100 ms or more, switch straight from
+  Expo to Hipfire on that report. Do **not** restart the 100 ms (that would mean two curve jumps mid-spray).
+- **No release grace:** any R2 release goes back to Linear on that report; the next press waits the full
+  delay again. Tap-fire and shotgun pumps stay linear.
+- **Lightbar cue on** for the Hipfire layer. The user recolours Edge Hipfire themselves.
+- Format: generalise rather than special-case. A profile may hold **several `<AimLayer>` blocks**. Order in
+  the file is priority. Each block gets an optional `<Delay>`. The user's existing single block stays
+  valid unchanged.
+
+**Selection rule (exact; the tests in 5.2 pin it).** Per device, per report, from the raw `L2`/`R2` (same
+place as now, before `cState` is replaced):
+1. Each layer tracks its own *held since* time. It is set on the report where the layer's raw trigger goes
+   from `<= Threshold` to `> Threshold`, and cleared on the report where it drops back. It is independent
+   of the other layers. So R2's timer runs from the R2 press even while L2 is held, which gives the
+   "Hipfire at once on L2 release" decision.
+2. A layer is *ready* when its trigger is held and `now - heldSince >= Delay`. `Delay 0` means ready on
+   the press report (the current behaviour).
+3. The active layer is the **first ready layer in file order**; none ready means the base profile.
+4. Timers reset whenever a different layer set is published (profile apply, clear, suspend/resume). A
+   trigger already held at that moment starts its timer on the first report after the reset. A rebuild
+   after saving a source profile may keep or reset timers (either is fine), but must not break the rule.
+5. Clock: `Stopwatch` milliseconds, read once per report and only when a layer set is published (the
+   no-layer path stays one volatile read + null check). `SetCurveAndDeadzone` already computes
+   `filterTimestamp`; reuse one value. Tests need a deterministic clock seam that costs nothing in
+   production (e.g. an internal overload taking `nowMs`, or a static test hook checked only when non-null).
+6. Threading: the timer state for slot N is only touched by the thread calling `SetCurveAndDeadzone` for
+   slot N. That is the input thread for live slots and the readings-preview timer for the editor slot;
+   the preview only calls with `profileIndex != inputIndex`. No locks or allocation in the per-report path.
+
+**Other things considered.**
+- **Delay vs. the user's own shotgun pull.** A firm shotgun pull can last over 100 ms. If it does,
+  Hipfire comes on briefly at the end of the shot. The lightbar cue shows this on hardware; tune `<Delay>`
+  (or `<Threshold>`) from that. Hand-editable, so no rebuild needed.
+- **Threshold.** The delay counts from the *layer's* raw threshold, not the game's fire point. With
+  `Threshold 100` and a slow squeeze, the game may already be firing before the timer starts. A lower
+  R2 threshold (e.g. 30–50) is fine because the delay already filters taps. Document it; default stays 100.
+- **Curve jump mid-spray.** Switching at 100 ms changes stick output at the same deflection (e.g. ~0.5 →
+  ~0.4 at half tilt with `0.3, 0.11`). This is the same kind of jump L2 already causes and the user is happy
+  with. Optional blend over N ms is **not** built. Revisit only if it feels like a hitch on hardware.
+- **Per-layer source failure.** A missing or broken source turns off only that layer (one warning per
+  layer, worded as now, plus the layer's trigger). The other layers keep working.
+- **Self-borrow** is skipped per layer, as now.
+- **Saving** a base profile from DS4Windows must keep every block, in order. Saving any source profile
+  rebuilds only the layers that borrow it.
+- **Cap:** at most 4 layers per profile. Extra blocks are ignored with one log warning; the profile
+  still loads.
+- **Unchanged:** fuzz, rotation, anti-snapback and calibration stay on the base profile; the L2/R2 output
+  the game sees is untouched; flick stick is unaffected.
+
+- **5.1 (worker-complex): several layers in the data model, XML and publish/rebuild.**
+  - Files: `DS4Control/DTOXml/ProfileDTO.cs` (`AimLayerSettingsDTO`, the `AimLayer` property,
+    `ShouldSerialize`, `MapFrom`/`MapTo`), `DS4Control/ScpUtil.cs` (the `aimLayer*` per-device arrays,
+    `ResetAimLayer`, the `Global.AimLayer*` statics), `DS4Control/AimLayerStickSettings.cs`
+    (`AimLayerRequest`, `AimLayerPreparation`, `AimLayerState` entries/publish/rebuild/warnings),
+    `DS4Control/PreparedProfileLoad.cs`, the existing `DS4WindowsTests/AimLayer*Tests.cs`.
+  - XML: `[XmlElement("AimLayer")]` on a list gives repeated `<AimLayer>` siblings, so today's single block
+    reads as a list of one. New element `<Delay>`: whole milliseconds 0–1000, default 0; a bad or
+    out-of-range value falls back to 0 (never fails the load, like the other fields). Save writes each
+    non-default block in order and writes `<Delay>` only when it is not 0, so an unchanged single-layer
+    profile saves the same as today.
+  - Store: replace the single-value per-device arrays with one per-device list of immutable layer configs
+    (or an equivalent design). Keep validation/test stores private, as now. Only the live store publishes.
+  - Publish: one immutable per-device *layer set* (ordered built layers, each knowing its trigger, threshold,
+    delay, lightbar flag and colour) behind one `Volatile` reference. Keep the generation/stale-save/
+    suspend/resume behaviour from 3.2 working for every layer.
+  - Acceptance:
+    - All existing `AimLayer*` tests still pass. Change them only where an API changed, never to weaken
+      a behaviour check.
+    - New tests: the user's single block (`SampleAimLayerXml`) loads and saves as before. Two blocks (L2 →
+      Expo, R2 → Hipfire, `Delay 100`) round-trip in order. `<Delay>` parse/default/bad/out-of-range.
+      The 5th block is ignored with one warning. A missing source for layer 2 leaves layer 1 published, and
+      the reverse. Saving the Hipfire source rebuilds only the R2 layer. Self-borrow is skipped per layer.
+      No `<AimLayer>` still clears the slot.
+    - `SetCurveAndDeadzone` may only be changed as needed to compile (e.g. pick the first layer whose
+      trigger is held, which gives the same behaviour as today for one layer). Real selection is 5.2.
+    - Full suite `TestCategory!=Benchmark`: 0 fail, same 12 skips.
+  - Return: design summary (types, where the list lives), files changed, test counts, anything 5.2 must know.
+- **5.2 (worker-complex): runtime selection with delay, and the lightbar.**
+  - Files: `DS4Control/Mapping.cs` (`SetCurveAndDeadzone` only), `DS4Control/AimLayerStickSettings.cs`
+    (per-device timer state, the active-layer handoff to the lightbar), `DS4Control/DS4LightBar.cs` only if
+    the `MainLightbarColor` signature changes, tests.
+  - Implement the selection rule above exactly. Replace `SetHeld(bool)` with publishing the **active layer**
+    (a `Volatile` reference write, no allocation), so the lightbar shows the active layer's colour if that
+    layer has `UseSourceLightbar`. A published set of `null` still wins over a stale active value.
+  - Acceptance (deterministic clock; report-by-report sequences):
+    - R2 only: `Delay - 1` ms → base; `Delay` ms → Hipfire; release → base on that report; re-press →
+      waits the full delay again.
+    - L2 at any time → Expo, including while Hipfire is active.
+    - R2 held ≥ 100 ms with L2 held, then L2 released → Hipfire **on that report**. R2 pressed while L2 is
+      held, L2 released at 30 ms → base until R2 reaches 100 ms, then Hipfire.
+    - Threshold boundaries (`== Threshold` not held, `Threshold + 1` held) for both layers.
+    - Timers reset on a new publish. A trigger held across a profile apply waits the full delay from the
+      first report after it.
+    - `Delay 0` single-layer profiles behave exactly as Phase 3 (the existing mapping tests unchanged).
+    - No layer: output byte-for-byte identical (existing equivalence tests).
+    - Zero allocation over 20,000 warm calls with the two-layer set, cycling through all states.
+    - Lightbar follows the active layer: Hipfire colour while Hipfire is active, Expo colour while L2 is
+      held, base otherwise; `UseSourceLightbar False` on one layer only affects that layer; custom colour /
+      battery gradient unaffected.
+    - Mutation check (report it): restarting R2's timer on L2 release, or deciding from processed triggers,
+      must fail at least one test.
+    - Full suite: 0 fail, same 12 skips.
+  - Return: what changed, test names/counts, mutation-check results.
+- **5.3 (worker-standard): update `docs/aim-layer.md`.**
+  - Several blocks, file order = priority (first ready wins), `<Delay>` (row in the table, default 0,
+    0–1000 ms, bad → 0), the 4-layer cap, per-layer source warnings, the threshold-vs-game-fire-point note,
+    the shotgun-pull tuning note.
+  - The user's full example: Edge Linear with the L2 → Edge Expo block first, then R2 → Edge Hipfire,
+    `Threshold 100`, `Delay 100`, `UseSourceLightbar True`, and the selection table from this phase.
+  - The two-block sample must be loaded by a test (add it next to `SampleAimLayerXml` if 5.1 didn't).
+- **5.4 (orchestrator):** full suite `TestCategory!=Benchmark` (record counts), Release build, record DLL
+  path/size/SHA-256 for 5.5. Push `fast-aim-switching` to `fork`.
+- **5.5 (the user, on hardware, DLL-swap method from 1.2):**
+  1. In DS4Windows, give **Edge Hipfire** its own lightbar colour and save it. Close DS4Windows. Back up
+     `Profiles\Edge Linear.xml`.
+  2. Add the second `<AimLayer>` block from `docs/aim-layer.md` to Edge Linear, **after** the L2 block.
+  3. Check, with the lightbar as the guide: quick shotgun taps stay blue (Linear); holding R2 changes to
+     the Hipfire colour after ~0.1 s; L2 at any time shows Expo; ADS + spray, then release L2 while still
+     firing, goes straight to Hipfire; letting go of R2 goes back to blue.
+  4. In game: movement and shotgun fights feel linear; sprays get the mild curve; ADS as before. If
+     deliberate shotgun shots flash the Hipfire colour, raise `<Delay>` (e.g. 150) by hand.
+
 ## 5. Decisions
 Made 2026-10-05:
 - Quieter per-press logging (formerly task A3): **dropped**. Keep the "using Profile" log line; it costs about one line per press and is useful evidence if switching misbehaves.
@@ -548,7 +690,9 @@ opens the PR from the GitHub compare page with the prefilled title/body. Origina
 
 ## 6. Next session
 
-Phases 1–4 are done. The only open item is the upstream pull request question in section 5. If the user
-says yes: branch from `origin/main`, cherry-pick only `ad237ab` (Task 2.2) and, optionally, `f948210` (the
-benchmark), leave this plan and all Phase 3 work out, rebuild, run the full suite, and ask before opening
-the pull request.
+Phases 1–4 are done and the upstream pull request branch is prepared (section 5). Next is **Phase 5
+(hipfire layer)**: run 5.1 → 5.2 → 5.3 in order (they share files), then 5.4, then hand 5.5 to the user.
+Kickoff message:
+
+> Implement Phase 5 of `PLAN-fast-aim-switching.md` (Tasks 5.1–5.4) as orchestrator. The selection rule and
+> the user's decisions are at the top of Phase 5; don't re-ask them. End with the 5.5 hardware steps.
