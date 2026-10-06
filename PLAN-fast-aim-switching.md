@@ -538,7 +538,10 @@ Made 2026-10-05:
 - Task 2.3 (prepared-profile cache): **dropped**; 2.2 alone met its target.
 - Pushing: **yes**, to the user's fork (`fork` remote, `petemess95/DS4Windows`).
 
-Still open (Phase 2 passed the Phase 4 tests on 2026-10-06; asked the user then):
+Upstream pull request (asked 2026-10-06): **yes, without the benchmark.** Branch `fast-profile-switch`
+(pushed to `fork`) = `origin/main` + one commit `12dae41` (Task 2.2 fix + self-contained
+`ProfileSerializerCacheTests`; full suite 7132 pass, 12 skips, 0 fail). `gh` is not installed, so the user
+opens the PR from the GitHub compare page with the prefilled title/body. Original question:
 - Offer the Phase 2 speed-up to `hbashton/DS4Windows` as a pull request? Recommended: upstream changes this area
   often, and a merged fix avoids redoing it every release. Leave this plan file out of that pull
   request.
