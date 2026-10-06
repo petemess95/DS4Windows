@@ -427,6 +427,25 @@ Tasks:
   - When `aimLayerUseSourceLightbar` is set and the layer is on, show the source profile's main
     colour (keep it in the borrowed settings) wherever `DS4LightBar` picks `m_Led`.
   - Don't change flashing or battery-indicator behaviour.
+  - **Done 2026-10-05.**
+    - "On": `SetCurveAndDeadzone` writes `AimLayerState.SetHeld(device, aimLayer != null)` right after its raw-trigger
+      decision (one `Volatile.Write` per report, no alloc/lock). Chosen over re-reading triggers in the lightbar:
+      the stick decides from `CurrentState[ind]` / `device.JointState` (copied, joined), which `DS4LightBar` can't
+      see; `getCurrentStateRef()` is a different buffer. `updateLightBar` runs later in the same report on the same
+      thread, so both agree per report.
+    - Colour: non-rainbow base colour moved into `DS4LightBar.StaticBaseColor(info, device, battery)` (custom →
+      `m_CustomLed`; LED-as-battery → `m_LowLed`→`m_Led` gradient; else plain `m_Led`). Only the plain branch calls
+      `AimLayerState.MainLightbarColor(device, m_Led)`, which returns `LightbarColor` iff the layer is published,
+      `UseSourceLightbar` and held (`Current` null wins over a stale held flag).
+    - Precedence: custom colour, rainbow and the battery gradient are not swapped; everything applied after the base
+      colour still wins (low-battery flash colour/pulse, idle fade, charging modes, forced/macro lightbar,
+      default/shutdown light, distance, OpenRGB, flash durations). No shift colour exists in this fork.
+    - Prompt update: `updateLightBar` runs every report; `SetLightbarState` marks dirty on any change, so press and
+      release show on the next report.
+    - Tests: `DS4WindowsTests/AimLayerLightbarTests.cs`, 5 pass (L2 sequence at/below/above threshold, R2 trigger,
+      `UseSourceLightbar` off, no layer + clear while held, battery gradient and custom unaffected). `AimLayer` 49
+      (44 + 5); full suite `TestCategory!=Benchmark` **7181 pass, 12 expected skips, 0 fail**. Build: 0 warnings
+      incremental.
 - **3.5 (worker-standard): hand-editing guide. No editor UI (user decision, 2026-10-05).**
   - Write `docs/aim-layer.md`. It should cover:
     - what the aim layer does, and which right-stick settings it swaps and which it keeps;

@@ -74,9 +74,9 @@ namespace DS4Windows
             //bool useLightRoutine = false;
             if (!defaultLight && !useForceLight && useLightRoutine)
             {
-                if (lightModeInfo.useCustomLed)
+                if (lightModeInfo.useCustomLed || !(lightModeInfo.rainbow > 0))
                 {
-                    color = lightModeInfo.m_CustomLed; //getCustomColor(deviceNum);
+                    color = StaticBaseColor(lightModeInfo, deviceNum, device.getBattery());
                 }
                 else
                 {
@@ -114,16 +114,6 @@ namespace DS4Windows
                             color = HuetoRGB((float)counters[deviceNum] % 360,
                                 (byte)(maxSat == 1.0 ? 255 : 255 * maxSat));
 
-                    }
-                    else if (lightModeInfo.ledAsBattery)
-                    {
-                        ref DS4Color fullColor = ref lightModeInfo.m_Led; //ref getMainColor(deviceNum);
-                        ref DS4Color lowColor = ref lightModeInfo.m_LowLed; //ref getLowColor(deviceNum);
-                        color = getTransitionedColor(ref lowColor, ref fullColor, device.getBattery());
-                    }
-                    else
-                    {
-                        color = getMainColor(deviceNum);
                     }
                 }
 
@@ -377,6 +367,28 @@ namespace DS4Windows
                 //device.SetHapticState(ref haptics);
                 //device.pushHapticState(ref haptics);
             }
+        }
+
+        // Base colour for the non-rainbow modes: custom, LED as battery
+        // gradient, or the plain main colour.
+        internal static DS4Color StaticBaseColor(LightbarDS4WinInfo lightModeInfo,
+            int deviceNum, int battery)
+        {
+            if (lightModeInfo.useCustomLed)
+                return lightModeInfo.m_CustomLed; //getCustomColor(deviceNum);
+
+            if (lightModeInfo.ledAsBattery)
+            {
+                ref DS4Color fullColor = ref lightModeInfo.m_Led; //ref getMainColor(deviceNum);
+                ref DS4Color lowColor = ref lightModeInfo.m_LowLed; //ref getLowColor(deviceNum);
+                return getTransitionedColor(ref lowColor, ref fullColor, battery);
+            }
+
+            // Aim layer cue: only the plain main colour is swapped; custom,
+            // rainbow, battery gradient and every overlay applied after this
+            // (low battery flash, idle fade, charging, forced/macro colour,
+            // distance, OpenRGB) still win.
+            return AimLayerState.MainLightbarColor(deviceNum, lightModeInfo.m_Led);
         }
 
         public static bool defaultLight = false, shuttingdown = false;

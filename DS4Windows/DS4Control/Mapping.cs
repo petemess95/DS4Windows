@@ -2082,6 +2082,7 @@ namespace DS4Windows
             AimLayerStickSettings aimLayer = AimLayerState.Current(device);
             if (aimLayer != null && !aimLayer.IsTriggerHeld(cState.L2, cState.R2))
                 aimLayer = null;
+            AimLayerState.SetHeld(device, aimLayer != null);
 
             double rotation = /*tempDoubleArray[device] =*/  getLSRotation(device);
             double rotationRS = /*tempDoubleArray[device] =*/ getRSRotation(device);

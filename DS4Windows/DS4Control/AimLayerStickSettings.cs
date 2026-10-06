@@ -165,6 +165,10 @@ namespace DS4Windows
         // switches back to the base profile) log once, not every time.
         private static readonly string[] lastWarning =
             new string[Global.TEST_PROFILE_ITEM_COUNT];
+        // Layer on (trigger held) as last decided by SetCurveAndDeadzone, so
+        // the lightbar follows the exact state the stick used (joined and
+        // copied input states included) without re-reading triggers.
+        private static readonly bool[] held = new bool[Global.TEST_PROFILE_ITEM_COUNT];
         private static long saveSequence;
 
         private static Entry[] CreateEntries()
@@ -178,6 +182,22 @@ namespace DS4Windows
         /// <summary>Null = layer off. Lock- and allocation-free.</summary>
         internal static AimLayerStickSettings Current(int device) =>
             Volatile.Read(ref published[device]);
+
+        // Input thread, once per report. Lock- and allocation-free.
+        internal static void SetHeld(int device, bool on) =>
+            Volatile.Write(ref held[device], on);
+
+        internal static bool IsHeld(int device) => Volatile.Read(ref held[device]);
+
+        // Lightbar: the colour to show where the plain main colour would be.
+        // Only swaps when the layer is published, wants its source colour and
+        // is held; otherwise returns baseColor.
+        internal static DS4Color MainLightbarColor(int device, DS4Color baseColor)
+        {
+            AimLayerStickSettings layer = Current(device);
+            return layer != null && layer.UseSourceLightbar && IsHeld(device) ?
+                layer.LightbarColor : baseColor;
+        }
 
         internal static long ReadSaveSequence() => Interlocked.Read(ref saveSequence);
 
