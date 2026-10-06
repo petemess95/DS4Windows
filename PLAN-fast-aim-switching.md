@@ -676,8 +676,7 @@ place as now, before `cState` is replaced):
 - **5.4 (orchestrator):** full suite `TestCategory!=Benchmark` (record counts), Release build, record DLL
   path/size/SHA-256 for 5.5. Push `fast-aim-switching` to `fork`.
   - **Done 2026-10-06.** Full suite `TestCategory!=Benchmark`: **7231 pass, 12 expected skips, 0 fail** (1 m 38 s).
-    Release build 0 errors, no new warnings. DLL `DS4Windowsind\Release
-et8.0-windows10.0.19041.0\DS4Windows.dll`,
+    Release build 0 errors, no new warnings. DLL `DS4Windows\bin\x64\Release\net8.0-windows10.0.19041.0\DS4Windows.dll`,
     11,017,728 bytes, SHA-256 `e0d61d4be263fde54495bf18165cc4031c2d7d9fdb2f54c681c307747511087f`.
 - **5.5 (the user, on hardware, DLL-swap method from 1.2):**
   1. In DS4Windows, give **Edge Hipfire** its own lightbar colour and save it. Close DS4Windows. Back up
