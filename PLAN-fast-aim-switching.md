@@ -2,9 +2,9 @@
 
 Written 2026-10-05.
 
-**Status (2026-10-05):** Phases 1, 2 and 3 are done (results under Tasks 1.1, 2.1, 2.2 and 3.1–3.5;
-Task 2.3 was dropped, see its note). The next step is **Phase 4, starting at Task 4.1**. The kickoff
-message for that session is under "Next session" at the end of this file.
+**Status (2026-10-06):** All four phases are done (results under Tasks 1.1, 2.1, 2.2, 3.1–3.5, 4.1 and
+4.2; Task 2.3 was dropped, see its note). Phase 2 and the aim layer both passed on the user's DualSense
+Edge. Remaining: the open upstream question in section 5.
 
 ---
 
@@ -46,7 +46,8 @@ Deliverables, in order:
 - Base profile: `Profiles\Edge Linear.xml`. Aim profile: `Profiles\Edge Expo.xml`.
 - The two files differ only in:
   - `RSOutputCurveMode`: `linear` (Edge Linear) vs `custom` with `RSOutputCurveCustom` `0.72, 0.26, 1.00, 1.00` (Edge Expo)
-  - `Color`: `0,0,255` (Edge Linear) vs `255,255,255` (Edge Expo)
+  - `Color`: `0,0,255` (Edge Linear) vs `255,255,255` (Edge Expo). *As of 2026-10-06 the user has
+    changed Edge Expo to `255,0,0` (red).*
   - Edge Linear's `ProfileActions` and touchpad-click mappings
 - The switch action, in `Actions.xml`:
   ```xml
@@ -120,7 +121,7 @@ Deliverables, in order:
 | 1. Setup | Baseline build and tests; how to test on hardware | 1.1, 1.2 | Done 2026-10-05 |
 | 2. Faster profile switching | Cut each switch from ~150 ms to a few ms; stop the leak | 2.1–2.3 | Done 2026-10-05 (2.3 dropped; warm `TryPrepare` ~105 ms → ~0.9 ms) |
 | 3. Aim layer | Swap right-stick settings while L2 is held, with no profile switch | 3.1–3.5 | Done 2026-10-05 (`749f3d8`…`c2db58a`; guide in `docs/aim-layer.md`) |
-| 4. Testing | Full test run, then you test on the controller | 4.1, 4.2 | Next |
+| 4. Testing | Full test run, then you test on the controller | 4.1, 4.2 | Done 2026-10-06 (all pass; no fixes needed) |
 
 Do the phases in order. Tasks are numbered `<phase>.<step>`.
 
@@ -509,6 +510,26 @@ Tasks:
      - Repeat the same tests: the curve should change instantly and the lightbar should switch to
        white while aiming.
      - The game's ADS should behave exactly as before.
+  - **Done 2026-10-05/06 by the user, Release DLL from `3511ab4` (SHA-256 `b0db97fe…`), DLL-swap method from 1.2.**
+    - First launch after the swap showed "VIIPER verification failed … usbip-win2 driver integrity could not be
+      verified: Timed out". That is the WMI `Win32_SystemDriver` query exceeding its 2 s limit
+      (`ViiperSetupManager.EvaluateUsbipDriverIntegrity`, code unchanged from `main`); the same query ran in
+      166–425 ms afterwards. Closing the dialog (not Install / Repair) and relaunching worked. Transient, not
+      caused by the branch.
+    - **Part 1 (Phase 2, "Switch 2 Edge Expo" action): pass.** CPU peaked at ~1.5% during rapid tapping (stock:
+      3–5%); one log line per press; curve "feels great" on quick taps.
+    - Lightbar did not change on the hold-to-switch, **with the stock DLL too**. Cause (worker-complex trace +
+      read of `Profiles.xml`): Controller 1 had **"Use Custom Color"** on (`<CustomLed1>True:255,98,0</CustomLed1>`),
+      an app-level per-controller setting that overrides every profile colour by design (`DS4LightBar.StaticBaseColor`,
+      same order as `main`). The trace confirmed the profile colour does reach a `DualSenseDevice` every report
+      when custom colour is off, including on temp switches. Not a bug; the user switched to "Use Profile Controls".
+      Documented consequence: the aim layer's lightbar cue is also hidden while "Use Custom Color" is on (Task 3.4
+      decision, covered by `AimLayerLightbarTests`). Making the cue override custom colour was offered as optional
+      and not requested.
+    - **Part 2 (aim layer): pass.** Edge Linear with the `<AimLayer>` block from `docs/aim-layer.md` and
+      "Switch 2 Edge Expo" removed from `<ProfileActions>`: curve changes on L2, ADS behaves as before, lightbar
+      changes on L2 (custom colour off). Log: no aim-layer warning and no per-press profile lines.
+    - User's backups: `%USERPROFILE%\DS4W-backup-2026-10-05` (original DLL + `%APPDATA%\DS4Windows` copy).
 
 ## 5. Decisions
 Made 2026-10-05:
@@ -517,27 +538,14 @@ Made 2026-10-05:
 - Task 2.3 (prepared-profile cache): **dropped**; 2.2 alone met its target.
 - Pushing: **yes**, to the user's fork (`fork` remote, `petemess95/DS4Windows`).
 
-Still open (ask the user once Phase 2 passes the Phase 4 tests):
+Still open (Phase 2 passed the Phase 4 tests on 2026-10-06; asked the user then):
 - Offer the Phase 2 speed-up to `hbashton/DS4Windows` as a pull request? Recommended: upstream changes this area
   often, and a merged fix avoids redoing it every release. Leave this plan file out of that pull
   request.
 
 ## 6. Next session
 
-Paste this to start Phase 4:
-
-> Read `PLAN-fast-aim-switching.md` in `P:\codex\DS4Windows Branch` and do Phase 4. Phases 1–3 are
-> done: Phase 2 cut warm `TryPrepare` from ~105 ms to ~0.9 ms and stopped the assembly leak; Phase 3
-> added the per-profile aim layer (Tasks 3.1–3.5, commits `749f3d8`…`c2db58a`, guide in
-> `docs/aim-layer.md`). The current baseline is under Task 4.1: the full suite with
-> `--filter "TestCategory!=Benchmark"` gives 7181 pass, 12 expected skips, 0 fail.
->
-> Do Task 4.1 yourself: run the full suite, re-run the 2.1 benchmark, and record the before and
-> after numbers. Then build the Release DLL and walk me through Task 4.2 on the controller, using
-> the DLL-swap steps in Task 1.2 (I do the swap as admin; never touch my real `%APPDATA%\DS4Windows`
-> files yourself). If anything needs fixing, orchestrate it with mainly worker-complex and
-> worker-standard agents; this work is too sensitive for the Sonnet workers except the most menial
-> tasks. Commit after each fix that passes its tests.
->
-> Once Phase 4 is done, update the plan (status table and results), and ask me the open question in
-> section 5 about offering the Phase 2 speed-up upstream.
+Phases 1–4 are done. The only open item is the upstream pull request question in section 5. If the user
+says yes: branch from `origin/main`, cherry-pick only `ad237ab` (Task 2.2) and, optionally, `f948210` (the
+benchmark), leave this plan and all Phase 3 work out, rebuild, run the full suite, and ask before opening
+the pull request.
