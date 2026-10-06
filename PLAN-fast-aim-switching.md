@@ -4,9 +4,8 @@ Written 2026-10-05.
 
 **Status (2026-10-06):** Phases 1–4 are done (results under Tasks 1.1, 2.1, 2.2, 3.1–3.5, 4.1 and
 4.2; Task 2.3 was dropped, see its note). Phase 2 and the aim layer both passed on the user's DualSense
-Edge. The upstream pull request branch is prepared (section 5). **Phase 5 (hipfire layer): Tasks 5.1–5.4
-done 2026-10-06; 5.5 (user hardware test) is next.** Phase 6 (better gyro aiming while
-aiming down sights) planned 2026-10-06; it starts after 5.5.
+Edge. The upstream pull request branch is prepared (section 5). **Phase 5 (hipfire layer) is done**, including the
+5.5 hardware test. **Phase 6 (better gyro aiming while aiming down sights) is next.**
 
 ---
 
@@ -124,8 +123,8 @@ Deliverables, in order:
 | 2. Faster profile switching | Cut each switch from ~150 ms to a few ms; stop the leak | 2.1–2.3 | Done 2026-10-05 (2.3 dropped; warm `TryPrepare` ~105 ms → ~0.9 ms) |
 | 3. Aim layer | Swap right-stick settings while L2 is held, with no profile switch | 3.1–3.5 | Done 2026-10-05 (`749f3d8`…`c2db58a`; guide in `docs/aim-layer.md`) |
 | 4. Testing | Full test run, then you test on the controller | 4.1, 4.2 | Done 2026-10-06 (all pass; no fixes needed) |
-| 5. Hipfire layer | Several aim layers per profile, first match wins, with an optional hold delay (R2 → Edge Hipfire after 100 ms, L2 still wins) | 5.1–5.5 | 5.1–5.4 done 2026-10-06 (`9da1d4b`, `0ece443`, `e321d2f`); 5.5 pending |
-| 6. Gyro aiming | Better gyro-to-stick for small corrections while aiming; every change off by default and byte-identical when off | 6.1–6.9 | Planned 2026-10-06; starts after 5.5 |
+| 5. Hipfire layer | Several aim layers per profile, first match wins, with an optional hold delay (R2 → Edge Hipfire after 100 ms, L2 still wins) | 5.1–5.5 | Done 2026-10-06 (`9da1d4b`, `0ece443`, `e321d2f`; 5.5 passed on hardware) |
+| 6. Gyro aiming | Better gyro-to-stick for small corrections while aiming; every change off by default and byte-identical when off | 6.1–6.9 | Planned 2026-10-06; next |
 
 Do the phases in order. Tasks are numbered `<phase>.<step>`.
 
@@ -689,6 +688,10 @@ place as now, before `cState` is replaced):
      firing, goes straight to Hipfire; letting go of R2 goes back to blue.
   4. In game: movement and shotgun fights feel linear; sprays get the mild curve; ADS as before. If
      deliberate shotgun shots flash the Hipfire colour, raise `<Delay>` (e.g. 150) by hand.
+  - **Done 2026-10-06 by the user, Release DLL from `0ece443` (SHA-256 `e0d61d4b…7511087f`), DLL-swap method.
+    Pass:** all the lightbar checks in step 3 behaved as described, and aiming is good in game. No changes needed.
+    The DLL copy needed an elevated PowerShell (the app's terminal is not elevated). User's backups for this
+    step: `%USERPROFILE%\DS4W-backup-2026-10-06` (Phase 4 DLL as `DS4Windows.dll.phase4` + `%APPDATA%\DS4Windows` copy).
 
 ### Phase 6: Better gyro aiming while aiming down sights (gyro → right stick)
 
@@ -853,13 +856,7 @@ opens the PR from the GitHub compare page with the prefilled title/body. Origina
 
 ## 6. Next session
 
-Phases 1–4 and Tasks 5.1–5.4 are done. Next is **Task 5.5** (the user's hardware test). After it, record the
-result under 5.5. Kickoff message:
-
-> Phase 5 of `PLAN-fast-aim-switching.md`: I ran the 5.5 hardware test. Here are the results: <results>.
-> Record them and fix anything that failed, as orchestrator.
-
-After 5.5 passes, Phase 6 kickoff message:
+Phases 1–5 are done (5.5 passed on hardware 2026-10-06). Next is **Phase 6**. Kickoff message:
 
 > Implement Phase 6 of `PLAN-fast-aim-switching.md` (Tasks 6.1–6.5), as orchestrator. Stop at 6.5 for my
 > quick check before the merge changes in 6.6.
