@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using DS4Windows.DS4Control;
@@ -6,11 +7,44 @@ using DS4Windows.DS4Control;
 namespace DS4Windows
 {
     /// <summary>
+    /// One &lt;AimLayer&gt; block as stored in a profile slot. Immutable, so a
+    /// slot's list can be shared with a preparation without copying.
+    /// </summary>
+    public sealed class AimLayerConfig
+    {
+        public AimLayerConfig(bool enabled, DS4Controls trigger, byte threshold, int delay,
+            string sourceProfile, bool useSourceLightbar)
+        {
+            Enabled = enabled;
+            Trigger = BackingStore.NormalizeAimLayerTrigger(trigger);
+            Threshold = threshold;
+            Delay = BackingStore.NormalizeAimLayerDelay(delay);
+            SourceProfile = sourceProfile?.Trim() ?? string.Empty;
+            UseSourceLightbar = useSourceLightbar;
+        }
+
+        public bool Enabled { get; }
+        public DS4Controls Trigger { get; }
+        public byte Threshold { get; }
+        // Milliseconds the trigger must be held before the layer comes on.
+        public int Delay { get; }
+        public string SourceProfile { get; }
+        public bool UseSourceLightbar { get; }
+
+        // Unconfigured blocks are not saved.
+        public bool IsDefault => !Enabled &&
+            Trigger == BackingStore.DEFAULT_AIM_LAYER_TRIGGER &&
+            Threshold == BackingStore.DEFAULT_AIM_LAYER_THRESHOLD &&
+            Delay == BackingStore.DEFAULT_AIM_LAYER_DELAY &&
+            SourceProfile.Length == 0 && !UseSourceLightbar;
+    }
+
+    /// <summary>
     /// Right-stick settings borrowed from an aim layer's source profile, plus
-    /// the base profile's trigger rule. Immutable after construction: every
-    /// reference it holds is a private copy, so the input thread can read it
-    /// without locks. Never mutate <see cref="RSModInfo"/> or
-    /// <see cref="RSOutBezierCurve"/>.
+    /// the base profile's trigger rule for that layer. Immutable after
+    /// construction: every reference it holds is a private copy, so the input
+    /// thread can read it without locks. Never mutate <see cref="RSModInfo"/>
+    /// or <see cref="RSOutBezierCurve"/>.
     /// </summary>
     internal sealed class AimLayerStickSettings
     {
@@ -25,6 +59,8 @@ namespace DS4Windows
             SourceProfile = request.SourceProfile;
             Trigger = request.Trigger;
             Threshold = request.Threshold;
+            Delay = request.Delay;
+            LayerIndex = request.LayerIndex;
             UseSourceLightbar = request.UseSourceLightbar;
             RSModInfo = CopyDeadZoneInfo(rsModInfo);
             RSSens = rsSens;
@@ -40,6 +76,11 @@ namespace DS4Windows
         internal string SourceProfile { get; }
         internal DS4Controls Trigger { get; }
         internal byte Threshold { get; }
+        internal int Delay { get; }
+        // Position of the block in the base profile (0 = first). Stable while
+        // the base profile stays applied, even when other layers fail or
+        // rebuild, so per-layer runtime state can be keyed by it.
+        internal int LayerIndex { get; }
         internal bool UseSourceLightbar { get; }
 
         // From the source profile (what GetRSDeadInfo, getRSSens,
@@ -98,19 +139,74 @@ namespace DS4Windows
     }
 
     /// <summary>
-    /// What a base profile asks to borrow. Kept even when the source cannot
-    /// be built, so saving the source later can still bring the layer up.
+    /// The layers a device uses right now: every layer that built, in file
+    /// (priority) order, never empty. Immutable and published as one
+    /// reference, so the input thread sees one consistent set per report.
+    /// </summary>
+    internal sealed class AimLayerSet
+    {
+        private readonly AimLayerStickSettings[] layers;
+
+        private AimLayerSet(AimLayerStickSettings[] layers) => this.layers = layers;
+
+        internal int Count => layers.Length;
+
+        internal AimLayerStickSettings this[int index] => layers[index];
+
+        // Null when nothing built, so "no layer" stays a null check.
+        internal static AimLayerSet From(IReadOnlyList<AimLayerStickSettings> built)
+        {
+            int count = 0;
+            for (int index = 0; index < built.Count; index++)
+            {
+                if (built[index] != null)
+                    count++;
+            }
+            if (count == 0)
+                return null;
+
+            var layers = new AimLayerStickSettings[count];
+            count = 0;
+            for (int index = 0; index < built.Count; index++)
+            {
+                if (built[index] != null)
+                    layers[count++] = built[index];
+            }
+            return new AimLayerSet(layers);
+        }
+
+        // First layer (file order) whose raw trigger is held; null = none.
+        // Lock- and allocation-free.
+        internal AimLayerStickSettings FirstHeld(byte l2, byte r2)
+        {
+            AimLayerStickSettings[] items = layers;
+            for (int index = 0; index < items.Length; index++)
+            {
+                if (items[index].IsTriggerHeld(l2, r2))
+                    return items[index];
+            }
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// What one base-profile block asks to borrow. Kept even when the source
+    /// cannot be built, so saving the source later can still bring the layer
+    /// up.
     /// </summary>
     internal sealed class AimLayerRequest
     {
         internal AimLayerRequest(string baseProfile, string sourceProfile,
-            DS4Controls trigger, byte threshold, bool useSourceLightbar)
+            DS4Controls trigger, byte threshold, bool useSourceLightbar,
+            int delay = BackingStore.DEFAULT_AIM_LAYER_DELAY, int layerIndex = 0)
         {
             BaseProfile = baseProfile;
             SourceProfile = sourceProfile;
             Trigger = trigger;
             Threshold = threshold;
             UseSourceLightbar = useSourceLightbar;
+            Delay = delay;
+            LayerIndex = layerIndex;
         }
 
         internal string BaseProfile { get; }
@@ -118,37 +214,72 @@ namespace DS4Windows
         internal DS4Controls Trigger { get; }
         internal byte Threshold { get; }
         internal bool UseSourceLightbar { get; }
+        internal int Delay { get; }
+        internal int LayerIndex { get; }
 
         internal bool Borrows(string profileName) =>
             string.Equals(SourceProfile, profileName, StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>Result of preparing a base profile's aim layer.</summary>
+    /// <summary>
+    /// Result of preparing a base profile's aim layers: one request per
+    /// enabled block that does not borrow from the base itself, and what
+    /// each built (null = that layer failed).
+    /// </summary>
     internal sealed class AimLayerPreparation
     {
-        internal AimLayerPreparation(AimLayerRequest request,
-            AimLayerStickSettings settings, long saveSequence)
+        private readonly AimLayerRequest[] requests;
+        private readonly AimLayerStickSettings[] built;
+
+        internal AimLayerPreparation(IReadOnlyList<AimLayerRequest> requests,
+            IReadOnlyList<AimLayerStickSettings> built, long saveSequence)
         {
-            Request = request;
-            Settings = settings;
+            ArgumentNullException.ThrowIfNull(requests);
+            ArgumentNullException.ThrowIfNull(built);
+            if (requests.Count == 0 || requests.Count != built.Count)
+                throw new ArgumentException("One built entry per request is required.", nameof(built));
+            this.requests = new AimLayerRequest[requests.Count];
+            this.built = new AimLayerStickSettings[built.Count];
+            for (int index = 0; index < this.requests.Length; index++)
+            {
+                this.requests[index] = requests[index] ??
+                    throw new ArgumentException("Requests cannot be null.", nameof(requests));
+                this.built[index] = built[index];
+            }
             SaveSequence = saveSequence;
+            Set = AimLayerSet.From(this.built);
         }
 
-        internal AimLayerRequest Request { get; }
-        internal AimLayerStickSettings Settings { get; }
+        // Single layer.
+        internal AimLayerPreparation(AimLayerRequest request,
+            AimLayerStickSettings settings, long saveSequence)
+            : this(new[] { request }, new[] { settings }, saveSequence)
+        {
+        }
+
+        internal IReadOnlyList<AimLayerRequest> Requests => requests;
+        internal IReadOnlyList<AimLayerStickSettings> Built => built;
+        // What Publish makes current; null when no layer built.
+        internal AimLayerSet Set { get; }
         internal long SaveSequence { get; }
+
+        internal AimLayerRequest[] CopyRequests() => (AimLayerRequest[])requests.Clone();
+        internal AimLayerStickSettings[] CopyBuilt() => (AimLayerStickSettings[])built.Clone();
     }
 
     /// <summary>
-    /// Per-device published aim layer. The input thread only calls
+    /// Per-device published aim layers. The input thread only calls
     /// <see cref="Current"/>; everything else runs on profile load/save paths.
     /// </summary>
     internal static class AimLayerState
     {
         private sealed class Entry
         {
-            internal AimLayerRequest Request;
-            internal AimLayerStickSettings Built;
+            // Parallel arrays, one slot per request; replaced, never shared
+            // with a published set.
+            internal AimLayerRequest[] Requests;
+            internal AimLayerStickSettings[] Built;
+            internal AimLayerSet Set;
             internal long Generation;
             internal bool Suspended;
         }
@@ -158,12 +289,14 @@ namespace DS4Windows
         // Test seam: runs between a save-triggered build and its publish.
         internal static Action<int> RebuildBuiltForTests;
 
-        private static readonly AimLayerStickSettings[] published =
-            new AimLayerStickSettings[Global.TEST_PROFILE_ITEM_COUNT];
+        private static readonly AimLayerSet[] published =
+            new AimLayerSet[Global.TEST_PROFILE_ITEM_COUNT];
         private static readonly Entry[] entries = CreateEntries();
-        // Last warning per slot, so repeated loads of a broken setup (temp
-        // switches back to the base profile) log once, not every time.
-        private static readonly string[] lastWarning =
+        // Last warning per slot and layer, so repeated loads of a broken setup
+        // (temp switches back to the base profile) log once, not every time.
+        private static readonly string[][] lastWarning = CreateWarnings();
+        // Last "too many blocks" warning per slot, same reason.
+        private static readonly string[] lastCapWarning =
             new string[Global.TEST_PROFILE_ITEM_COUNT];
         // Layer on (trigger held) as last decided by SetCurveAndDeadzone, so
         // the lightbar follows the exact state the stick used (joined and
@@ -179,8 +312,16 @@ namespace DS4Windows
             return result;
         }
 
-        /// <summary>Null = layer off. Lock- and allocation-free.</summary>
-        internal static AimLayerStickSettings Current(int device) =>
+        private static string[][] CreateWarnings()
+        {
+            var result = new string[Global.TEST_PROFILE_ITEM_COUNT][];
+            for (int index = 0; index < result.Length; index++)
+                result[index] = new string[BackingStore.MAX_AIM_LAYERS];
+            return result;
+        }
+
+        /// <summary>Null = no layer. Lock- and allocation-free.</summary>
+        internal static AimLayerSet Current(int device) =>
             Volatile.Read(ref published[device]);
 
         // Input thread, once per report. Lock- and allocation-free.
@@ -190,39 +331,76 @@ namespace DS4Windows
         internal static bool IsHeld(int device) => Volatile.Read(ref held[device]);
 
         // Lightbar: the colour to show where the plain main colour would be.
-        // Only swaps when the layer is published, wants its source colour and
-        // is held; otherwise returns baseColor.
+        // Only swaps when a layer is published, wants its source colour and
+        // is held; otherwise returns baseColor. Interim for several layers:
+        // the held flag does not say which layer, so the first is used (the
+        // same as before for one layer); Task 5.2 hands over the active layer.
         internal static DS4Color MainLightbarColor(int device, DS4Color baseColor)
         {
-            AimLayerStickSettings layer = Current(device);
-            return layer != null && layer.UseSourceLightbar && IsHeld(device) ?
-                layer.LightbarColor : baseColor;
+            AimLayerSet layers = Current(device);
+            if (layers == null || !IsHeld(device))
+                return baseColor;
+            AimLayerStickSettings layer = layers[0];
+            return layer.UseSourceLightbar ? layer.LightbarColor : baseColor;
         }
 
         internal static long ReadSaveSequence() => Interlocked.Read(ref saveSequence);
 
         // Called on the cold prepare path with the base profile mapped into its
-        // private validation store. Never throws: the aim layer must not stop
-        // the base profile from loading.
+        // private validation store. blockCount is how many <AimLayer> blocks
+        // the file had (the store keeps at most MAX_AIM_LAYERS). Never throws:
+        // an aim layer must not stop the base profile from loading.
         internal static AimLayerPreparation Prepare(BackingStore baseStore, int device,
-            string basePath, long sequence)
+            string basePath, long sequence, int blockCount)
         {
-            if (!baseStore.aimLayerEnabled[device])
+            string baseName = Path.GetFileNameWithoutExtension(basePath) ?? string.Empty;
+            IReadOnlyList<AimLayerConfig> configs = baseStore.aimLayers[device];
+            WarnIgnoredBlocks(device, baseName, blockCount - configs.Count);
+
+            List<AimLayerRequest> requests = null;
+            for (int index = 0; index < configs.Count; index++)
+            {
+                AimLayerConfig config = configs[index];
+                if (!config.Enabled)
+                    continue;
+                // Borrowing from itself would change nothing; skip this layer only.
+                if (string.Equals(config.SourceProfile, baseName, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                requests ??= new List<AimLayerRequest>(configs.Count);
+                requests.Add(new AimLayerRequest(baseName, config.SourceProfile,
+                    config.Trigger, config.Threshold, config.UseSourceLightbar,
+                    config.Delay, index));
+            }
+            if (requests == null)
                 return null;
 
-            string baseName = Path.GetFileNameWithoutExtension(basePath) ?? string.Empty;
-            string sourceName = baseStore.aimLayerSourceProfile[device]?.Trim() ?? string.Empty;
-            if (string.Equals(sourceName, baseName, StringComparison.OrdinalIgnoreCase))
-                return null; // Borrowing from itself would change nothing.
-
-            var request = new AimLayerRequest(baseName, sourceName,
-                baseStore.aimLayerTrigger[device], baseStore.aimLayerThreshold[device],
-                baseStore.aimLayerUseSourceLightbar[device]);
-            return new AimLayerPreparation(request, Build(request, device), sequence);
+            var built = new AimLayerStickSettings[requests.Count];
+            for (int index = 0; index < built.Length; index++)
+                built[index] = Build(requests[index], device);
+            return new AimLayerPreparation(requests, built, sequence);
         }
 
+        private static void WarnIgnoredBlocks(int device, string baseName, int ignored)
+        {
+            if (ignored <= 0)
+            {
+                Volatile.Write(ref lastCapWarning[device], null);
+                return;
+            }
+
+            string message = $"Aim layer of profile \"{baseName}\": {ignored} extra " +
+                $"<AimLayer> block(s) ignored; at most {BackingStore.MAX_AIM_LAYERS} are used";
+            if (Interlocked.Exchange(ref lastCapWarning[device], message) != message)
+                AppLogger.LogToGui(message, true);
+        }
+
+        // One layer. A failure turns off only this layer.
         internal static AimLayerStickSettings Build(AimLayerRequest request, int device)
         {
+            // LayerIndex is below MAX_AIM_LAYERS for prepared requests; clamp
+            // for hand-built ones.
+            int warningSlot = (uint)request.LayerIndex < BackingStore.MAX_AIM_LAYERS ?
+                request.LayerIndex : 0;
             string failure;
             if (request.SourceProfile.Length == 0)
                 failure = "no source profile is set";
@@ -238,7 +416,7 @@ namespace DS4Windows
                             out BackingStore source, out ProfilePreparationFailure kind,
                             out string error))
                     {
-                        Volatile.Write(ref lastWarning[device], null);
+                        Volatile.Write(ref lastWarning[device][warningSlot], null);
                         return AimLayerStickSettings.FromStore(request, source, device);
                     }
                     failure = kind == ProfilePreparationFailure.Missing ?
@@ -250,9 +428,10 @@ namespace DS4Windows
                 }
             }
 
-            string message = $"Aim layer of profile \"{request.BaseProfile}\" is off: " +
+            string message = $"Aim layer of profile \"{request.BaseProfile}\" " +
+                $"({request.Trigger}) is off: " +
                 $"source profile \"{request.SourceProfile}\": {failure}";
-            if (Interlocked.Exchange(ref lastWarning[device], message) != message)
+            if (Interlocked.Exchange(ref lastWarning[device][warningSlot], message) != message)
                 AppLogger.LogToGui(message, true);
             return null;
         }
@@ -265,17 +444,18 @@ namespace DS4Windows
             lock (entries[device])
             {
                 Entry entry = entries[device];
-                entry.Request = preparation?.Request;
-                entry.Built = preparation?.Settings;
+                entry.Requests = preparation?.CopyRequests();
+                entry.Built = preparation?.CopyBuilt();
+                entry.Set = preparation?.Set;
                 entry.Suspended = false;
                 entry.Generation++;
-                Volatile.Write(ref published[device], entry.Built);
-                stale = entry.Request != null &&
+                Volatile.Write(ref published[device], entry.Set);
+                stale = entry.Requests != null &&
                     preparation.SaveSequence != ReadSaveSequence();
             }
 
             // A profile was saved after this one was prepared; it may have been
-            // the source. Re-read it off the pause (generation-checked).
+            // a source. Re-read every layer off the pause (generation-checked).
             if (stale)
                 ThreadPool.QueueUserWorkItem(static state =>
                     RebuildIfBorrowing((int)state, null), device);
@@ -286,15 +466,16 @@ namespace DS4Windows
             lock (entries[device])
             {
                 Entry entry = entries[device];
-                entry.Request = null;
+                entry.Requests = null;
                 entry.Built = null;
+                entry.Set = null;
                 entry.Suspended = false;
                 entry.Generation++;
                 Volatile.Write(ref published[device], null);
             }
         }
 
-        // Controller removed: stop publishing, but keep the request so a
+        // Controller removed: stop publishing, but keep the requests so a
         // reconnect that keeps the slot's profile (temp/auto profile, Joy-Con
         // handoff) can resume without reloading it.
         internal static void Suspend(int device)
@@ -312,12 +493,12 @@ namespace DS4Windows
             {
                 Entry entry = entries[device];
                 entry.Suspended = false;
-                Volatile.Write(ref published[device], entry.Built);
+                Volatile.Write(ref published[device], entry.Set);
             }
         }
 
-        // SaveProfileNew wrote profileName. Rebuild every slot borrowing it.
-        // Cheap when nothing borrows it; ~1 ms per borrowing slot otherwise.
+        // SaveProfileNew wrote profileName. Rebuild the layers borrowing it, in
+        // every slot. Cheap when nothing borrows it; ~1 ms per borrowing layer.
         internal static void OnProfileSaved(string profileName)
         {
             Interlocked.Increment(ref saveSequence);
@@ -325,22 +506,36 @@ namespace DS4Windows
                 RebuildIfBorrowing(device, profileName);
         }
 
-        // profileName null = rebuild whatever the slot borrows.
+        // profileName null = rebuild every layer of the slot. Layers that do
+        // not borrow profileName keep their built object.
         private static void RebuildIfBorrowing(int device, string profileName)
         {
             for (int attempt = 0; attempt < SaveRebuildAttempts; attempt++)
             {
-                AimLayerRequest request;
+                AimLayerRequest[] requests;
                 long generation;
                 lock (entries[device])
                 {
-                    request = entries[device].Request;
+                    requests = entries[device].Requests;
                     generation = entries[device].Generation;
                 }
-                if (request == null || (profileName != null && !request.Borrows(profileName)))
+                if (requests == null)
                     return;
 
-                AimLayerStickSettings built = Build(request, device);
+                AimLayerStickSettings[] rebuilt = null;
+                bool[] changed = null;
+                for (int index = 0; index < requests.Length; index++)
+                {
+                    if (profileName != null && !requests[index].Borrows(profileName))
+                        continue;
+                    rebuilt ??= new AimLayerStickSettings[requests.Length];
+                    changed ??= new bool[requests.Length];
+                    rebuilt[index] = Build(requests[index], device);
+                    changed[index] = true;
+                }
+                if (rebuilt == null)
+                    return;
+
                 RebuildBuiltForTests?.Invoke(device);
                 lock (entries[device])
                 {
@@ -349,10 +544,17 @@ namespace DS4Windows
                     // write is what ends up published.
                     if (entry.Generation != generation)
                         continue;
+                    var built = (AimLayerStickSettings[])entry.Built.Clone();
+                    for (int index = 0; index < built.Length; index++)
+                    {
+                        if (changed[index])
+                            built[index] = rebuilt[index];
+                    }
                     entry.Built = built;
+                    entry.Set = AimLayerSet.From(built);
                     entry.Generation++;
                     if (!entry.Suspended)
-                        Volatile.Write(ref published[device], built);
+                        Volatile.Write(ref published[device], entry.Set);
                     return;
                 }
             }

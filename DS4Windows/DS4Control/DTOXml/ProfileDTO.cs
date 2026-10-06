@@ -354,8 +354,9 @@ namespace DS4WinWPF.DS4Control.DTOXml
         }
     }
 
-    // <AimLayer> block. The block is meant to be hand-edited, so a bad value
-    // falls back to its default instead of rejecting the whole profile.
+    // One <AimLayer> block (a profile may repeat it; file order is priority).
+    // The block is meant to be hand-edited, so a bad value falls back to its
+    // default instead of rejecting the whole profile.
     public sealed class AimLayerSettingsDTO
     {
         [XmlIgnore]
@@ -395,6 +396,25 @@ namespace DS4WinWPF.DS4Control.DTOXml
                 parsed : BackingStore.DEFAULT_AIM_LAYER_THRESHOLD;
         }
 
+        private int _delay = BackingStore.DEFAULT_AIM_LAYER_DELAY;
+        [XmlIgnore]
+        public int Delay
+        {
+            get => _delay;
+            set => _delay = BackingStore.NormalizeAimLayerDelay(value);
+        }
+
+        [XmlElement("Delay")]
+        public string DelayString
+        {
+            get => _delay.ToString();
+            set => Delay = int.TryParse(value?.Trim(), out int parsed) ?
+                parsed : BackingStore.DEFAULT_AIM_LAYER_DELAY;
+        }
+
+        // Only written when set, so profiles from before <Delay> save unchanged.
+        public bool ShouldSerializeDelayString() => _delay != BackingStore.DEFAULT_AIM_LAYER_DELAY;
+
         [XmlElement("SourceProfile")]
         public string SourceProfile { get; set; } = string.Empty;
 
@@ -408,28 +428,46 @@ namespace DS4WinWPF.DS4Control.DTOXml
             set => UseSourceLightbar = XmlDataUtilities.StrToBool(value);
         }
 
-        internal bool IsDefault() => !Enabled &&
-            Trigger == BackingStore.DEFAULT_AIM_LAYER_TRIGGER &&
-            Threshold == BackingStore.DEFAULT_AIM_LAYER_THRESHOLD &&
-            string.IsNullOrEmpty(SourceProfile) && !UseSourceLightbar;
+        internal bool IsDefault() => ToConfig().IsDefault;
 
-        internal static AimLayerSettingsDTO From(BackingStore source, int device) => new()
+        internal static AimLayerSettingsDTO From(AimLayerConfig config) => new()
         {
-            Enabled = source.aimLayerEnabled[device],
-            Trigger = source.aimLayerTrigger[device],
-            Threshold = source.aimLayerThreshold[device],
-            SourceProfile = source.aimLayerSourceProfile[device] ?? string.Empty,
-            UseSourceLightbar = source.aimLayerUseSourceLightbar[device],
+            Enabled = config.Enabled,
+            Trigger = config.Trigger,
+            Threshold = config.Threshold,
+            Delay = config.Delay,
+            SourceProfile = config.SourceProfile,
+            UseSourceLightbar = config.UseSourceLightbar,
         };
 
-        internal void ApplyTo(BackingStore destination, int device)
+        // Hand-edited XML may wrap the name in whitespace or newlines; the
+        // config trims it.
+        internal AimLayerConfig ToConfig() => new(Enabled, Trigger, Threshold, Delay,
+            SourceProfile, UseSourceLightbar);
+
+        // Every configured block, in order. Unconfigured blocks are dropped so
+        // a profile that never had one saves unchanged.
+        internal static List<AimLayerSettingsDTO> From(BackingStore source, int device)
         {
-            destination.aimLayerEnabled[device] = Enabled;
-            destination.aimLayerTrigger[device] = Trigger;
-            destination.aimLayerThreshold[device] = Threshold;
-            // Hand-edited XML may wrap the name in whitespace or newlines.
-            destination.aimLayerSourceProfile[device] = SourceProfile?.Trim() ?? string.Empty;
-            destination.aimLayerUseSourceLightbar[device] = UseSourceLightbar;
+            var result = new List<AimLayerSettingsDTO>();
+            foreach (AimLayerConfig config in source.aimLayers[device])
+            {
+                if (!config.IsDefault)
+                    result.Add(From(config));
+            }
+            return result;
+        }
+
+        // Always replaces the slot's list: no blocks clears it. Blocks past
+        // MAX_AIM_LAYERS are ignored (the prepare step logs that).
+        internal static void ApplyTo(List<AimLayerSettingsDTO> blocks,
+            BackingStore destination, int device)
+        {
+            int count = Math.Min(blocks?.Count ?? 0, BackingStore.MAX_AIM_LAYERS);
+            var configs = new AimLayerConfig[count];
+            for (int index = 0; index < count; index++)
+                configs[index] = (blocks[index] ?? new AimLayerSettingsDTO()).ToConfig();
+            destination.aimLayers[device] = configs;
         }
     }
 
@@ -2317,15 +2355,15 @@ namespace DS4WinWPF.DS4Control.DTOXml
         public bool ShouldSerializeTriggerLabSettings() =>
             TriggerLabSettings?.IsDefaultConfiguration() == false;
 
+        // Repeated <AimLayer> siblings, in priority order; a single block reads
+        // as a list of one. MapFrom only adds configured blocks, so a profile
+        // without one saves unchanged; a disabled block that names a source
+        // is still kept.
         [XmlElement("AimLayer")]
-        public AimLayerSettingsDTO AimLayer
+        public List<AimLayerSettingsDTO> AimLayers
         {
             get; set;
-        } = new AimLayerSettingsDTO();
-
-        // Omitted while unconfigured so existing profiles save unchanged; a
-        // disabled block that names a source is still kept.
-        public bool ShouldSerializeAimLayer() => AimLayer?.IsDefault() == false;
+        } = new List<AimLayerSettingsDTO>();
 
         [XmlElement("DS4OutputTriggerMode")]
         public DS4TriggerOutputMode OutputDS4TriggerMode
@@ -2868,7 +2906,7 @@ namespace DS4WinWPF.DS4Control.DTOXml
             OutputContDevice = source.outputDevType[deviceIndex].Normalize();
             AudioHapticsSettings = source.audioHapticsSettings[deviceIndex].Clone();
             TriggerLabSettings = source.triggerLabSettings[deviceIndex].Clone();
-            AimLayer = AimLayerSettingsDTO.From(source, deviceIndex);
+            AimLayers = AimLayerSettingsDTO.From(source, deviceIndex);
             OutputDS4TriggerMode = source.outputDS4TriggerMode[deviceIndex];
 
             ProfileActions = string.Join("/", source.profileActions[deviceIndex]);
@@ -3777,7 +3815,7 @@ namespace DS4WinWPF.DS4Control.DTOXml
             destination.audioHapticsSettings[deviceIndex] = (AudioHapticsSettings ?? new AudioHapticsProfileSettings()).Clone();
             destination.triggerLabSettings[deviceIndex] = (TriggerLabSettings ?? new TriggerLabProfileSettings()).Clone();
             // Always written: a profile without <AimLayer> must clear the slot.
-            (AimLayer ?? new AimLayerSettingsDTO()).ApplyTo(destination, deviceIndex);
+            AimLayerSettingsDTO.ApplyTo(AimLayers, destination, deviceIndex);
             destination.outputDS4TriggerMode[deviceIndex] = OutputDS4TriggerMode;
 
             if (!string.IsNullOrEmpty(ProfileActions))

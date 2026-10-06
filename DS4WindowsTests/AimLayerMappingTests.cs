@@ -119,7 +119,8 @@ public class AimLayerMappingTests
         // Same save sequence: no background rebuild (nothing to read).
         AimLayerState.Publish(Slot, new AimLayerPreparation(request, settings,
             AimLayerState.ReadSaveSequence()));
-        Assert.AreSame(settings, AimLayerState.Current(Slot));
+        Assert.AreEqual(1, AimLayerState.Current(Slot).Count);
+        Assert.AreSame(settings, AimLayerState.Current(Slot)[0]);
         return settings;
     }
 
@@ -154,7 +155,7 @@ public class AimLayerMappingTests
         Action<BackingStore> extra = null)
     {
         object live = StoreField.GetValue(null);
-        AimLayerStickSettings layer = AimLayerState.Current(Slot);
+        AimLayerSet layer = AimLayerState.Current(Slot);
         Assert.IsNull(layer, "Compute references before publishing.");
         Install(rs, others, extra);
         var result = new DS4State[inputs.Length];

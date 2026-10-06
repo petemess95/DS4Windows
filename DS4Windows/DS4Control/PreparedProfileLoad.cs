@@ -48,8 +48,8 @@ namespace DS4Windows.DS4Control
         internal void QueuePostLoadAfterResume() =>
             Interlocked.Exchange(ref deferredPostLoad, null)?.Invoke();
 
-        // Aim layer borrowed from another profile, built here so the source
-        // profile is read before any report pause. Null = layer off.
+        // Aim layers borrowed from other profiles, built here so every source
+        // profile is read before any report pause. Null = no layer.
         internal AimLayerPreparation AimLayer { get; private set; }
 
         internal static bool TryPrepare(string path, int device,
@@ -65,13 +65,14 @@ namespace DS4Windows.DS4Control
                 return false;
             prepared = new PreparedProfileLoad(path, device, candidate, migrated)
             {
-                AimLayer = AimLayerState.Prepare(validation, device, path, saveSequence),
+                AimLayer = AimLayerState.Prepare(validation, device, path, saveSequence,
+                    candidate.AimLayers?.Count ?? 0),
             };
             return true;
         }
 
         // Prepares an aim-layer source: same validation as TryPrepare, but the
-        // mapped scratch store is returned and its own aim layer is ignored.
+        // mapped scratch store is returned and its own aim layers are ignored.
         internal static bool TryPrepareSource(string path, int device,
             out BackingStore store, out ProfilePreparationFailure failure,
             out string error) =>

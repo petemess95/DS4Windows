@@ -2076,12 +2076,12 @@ namespace DS4Windows
         internal static DS4State SetCurveAndDeadzone(int device, DS4State cState, DS4State dState,
             object sourceOwner)
         {
-            // Aim layer: one volatile read; null (no layer) keeps every base
+            // Aim layers: one volatile read; null (no layer) keeps every base
             // read below. Decided from the raw triggers, before cState is
-            // replaced. The borrowed settings are shared and read-only.
-            AimLayerStickSettings aimLayer = AimLayerState.Current(device);
-            if (aimLayer != null && !aimLayer.IsTriggerHeld(cState.L2, cState.R2))
-                aimLayer = null;
+            // replaced: the first held layer in file order. The borrowed
+            // settings are shared and read-only.
+            AimLayerSet aimLayers = AimLayerState.Current(device);
+            AimLayerStickSettings aimLayer = aimLayers?.FirstHeld(cState.L2, cState.R2);
             AimLayerState.SetHeld(device, aimLayer != null);
 
             double rotation = /*tempDoubleArray[device] =*/  getLSRotation(device);

@@ -3038,11 +3038,7 @@ namespace DS4Windows
             set => m_Config.gameBarProfileName = value;
         }
 
-        public static bool[] AimLayerEnabled => m_Config.aimLayerEnabled;
-        public static DS4Controls[] AimLayerTrigger => m_Config.aimLayerTrigger;
-        public static byte[] AimLayerThreshold => m_Config.aimLayerThreshold;
-        public static string[] AimLayerSourceProfile => m_Config.aimLayerSourceProfile;
-        public static bool[] AimLayerUseSourceLightbar => m_Config.aimLayerUseSourceLightbar;
+        public static IReadOnlyList<AimLayerConfig>[] AimLayers => m_Config.aimLayers;
 
         public static bool[] DualSenseMuteButtonLightEnabled
         {
@@ -4822,39 +4818,40 @@ namespace DS4Windows
         //
         // End of DualSense specific profile options
 
-        // Aim layer: while the trigger is held, the right stick borrows the
-        // stick settings of aimLayerSourceProfile (no profile switch).
+        // Aim layers: while a layer's trigger is held, the right stick borrows
+        // the stick settings of its source profile (no profile switch). File
+        // order is priority.
         public const DS4Controls DEFAULT_AIM_LAYER_TRIGGER = DS4Controls.L2;
         // Matches the special-action digital trigger test (L2/R2 > 100).
         public const byte DEFAULT_AIM_LAYER_THRESHOLD = 100;
-        public bool[] aimLayerEnabled = new bool[Global.TEST_PROFILE_ITEM_COUNT] { false, false, false, false, false, false, false, false, false };
-        public DS4Controls[] aimLayerTrigger = new DS4Controls[Global.TEST_PROFILE_ITEM_COUNT]
+        // Hold time (ms) before a layer comes on; 0 = on the press report.
+        public const int DEFAULT_AIM_LAYER_DELAY = 0;
+        public const int MAX_AIM_LAYER_DELAY = 1000;
+        // Extra <AimLayer> blocks are ignored (with a warning when prepared).
+        public const int MAX_AIM_LAYERS = 4;
+        // Per device: immutable configs in file order, at most MAX_AIM_LAYERS.
+        // Replaced as a whole, never edited in place.
+        public IReadOnlyList<AimLayerConfig>[] aimLayers = CreateEmptyAimLayers();
+
+        private static IReadOnlyList<AimLayerConfig>[] CreateEmptyAimLayers()
         {
-            DEFAULT_AIM_LAYER_TRIGGER, DEFAULT_AIM_LAYER_TRIGGER, DEFAULT_AIM_LAYER_TRIGGER,
-            DEFAULT_AIM_LAYER_TRIGGER, DEFAULT_AIM_LAYER_TRIGGER, DEFAULT_AIM_LAYER_TRIGGER,
-            DEFAULT_AIM_LAYER_TRIGGER, DEFAULT_AIM_LAYER_TRIGGER, DEFAULT_AIM_LAYER_TRIGGER,
-        };
-        public byte[] aimLayerThreshold = new byte[Global.TEST_PROFILE_ITEM_COUNT]
-        {
-            DEFAULT_AIM_LAYER_THRESHOLD, DEFAULT_AIM_LAYER_THRESHOLD, DEFAULT_AIM_LAYER_THRESHOLD,
-            DEFAULT_AIM_LAYER_THRESHOLD, DEFAULT_AIM_LAYER_THRESHOLD, DEFAULT_AIM_LAYER_THRESHOLD,
-            DEFAULT_AIM_LAYER_THRESHOLD, DEFAULT_AIM_LAYER_THRESHOLD, DEFAULT_AIM_LAYER_THRESHOLD,
-        };
-        public string[] aimLayerSourceProfile = new string[Global.TEST_PROFILE_ITEM_COUNT] { "", "", "", "", "", "", "", "", "" };
-        public bool[] aimLayerUseSourceLightbar = new bool[Global.TEST_PROFILE_ITEM_COUNT] { false, false, false, false, false, false, false, false, false };
+            var result = new IReadOnlyList<AimLayerConfig>[Global.TEST_PROFILE_ITEM_COUNT];
+            Array.Fill(result, Array.Empty<AimLayerConfig>());
+            return result;
+        }
 
         // v1 only reads analog L2/R2. Any other control (hand-edited or from a
         // newer build) falls back to L2 rather than failing the profile load.
         public static DS4Controls NormalizeAimLayerTrigger(DS4Controls trigger) =>
             trigger == DS4Controls.R2 ? DS4Controls.R2 : DEFAULT_AIM_LAYER_TRIGGER;
 
+        // Out of range (hand-edited) falls back to no delay.
+        public static int NormalizeAimLayerDelay(int delay) =>
+            delay >= 0 && delay <= MAX_AIM_LAYER_DELAY ? delay : DEFAULT_AIM_LAYER_DELAY;
+
         private void ResetAimLayer(int device)
         {
-            aimLayerEnabled[device] = false;
-            aimLayerTrigger[device] = DEFAULT_AIM_LAYER_TRIGGER;
-            aimLayerThreshold[device] = DEFAULT_AIM_LAYER_THRESHOLD;
-            aimLayerSourceProfile[device] = string.Empty;
-            aimLayerUseSourceLightbar[device] = false;
+            aimLayers[device] = Array.Empty<AimLayerConfig>();
             // Only the live store publishes; validation/test stores are private.
             if (ReferenceEquals(this, Global.store))
                 AimLayerState.Clear(device);
