@@ -2,8 +2,9 @@
 
 Written 2026-10-05.
 
-**Status (2026-10-05):** Phase 1 is done (results under Task 1.1). The next step is **Phase 2, starting
-at Task 2.1**. The kickoff message for that session is under "Next session" at the end of this file.
+**Status (2026-10-05):** Phases 1 and 2 are done (results under Tasks 1.1, 2.1 and 2.2; Task 2.3 was
+dropped, see its note). The next step is **Phase 3, starting at Task 3.1**. The kickoff message for
+that session is under "Next session" at the end of this file.
 
 ---
 
@@ -117,8 +118,8 @@ Deliverables, in order:
 | Phase | What | Tasks | Status |
 |---|---|---|---|
 | 1. Setup | Baseline build and tests; how to test on hardware | 1.1, 1.2 | Done 2026-10-05 |
-| 2. Faster profile switching | Cut each switch from ~150 ms to a few ms; stop the leak | 2.1–2.3 | Next |
-| 3. Aim layer | Swap right-stick settings while L2 is held, with no profile switch | 3.1–3.5 | Not started |
+| 2. Faster profile switching | Cut each switch from ~150 ms to a few ms; stop the leak | 2.1–2.3 | Done 2026-10-05 (2.3 dropped; warm `TryPrepare` ~105 ms → ~0.9 ms) |
+| 3. Aim layer | Swap right-stick settings while L2 is held, with no profile switch | 3.1–3.5 | Next |
 | 4. Testing | Full test run, then you test on the controller | 4.1, 4.2 | Not started |
 
 Do the phases in order. Tasks are numbered `<phase>.<step>`.
@@ -228,6 +229,10 @@ Do the phases in order. Tasks are numbered `<phase>.<step>`.
       DTO each time; a migrated profile is re-read after the auto-save rewrites it; a missing or
       invalid file still fails the same way as before (`ProfilePreparationFailure` values unchanged).
     - Baseline tests are no worse than in 1.1.
+  - **Dropped 2026-10-05 (user decision).** After 2.2, warm `TryPrepare` is ~0.9 ms, already under
+    this task's 10 ms target, and the leak is gone. The cache would save at most ~0.5 ms more per
+    switch, and its invalidation (save, delete, rename, timestamps) risks loading a stale curve. Revisit
+    only if the 4.2 hardware test shows switching is still slow.
 
 ### Phase 3: Aim layer (right-stick settings swap while L2 is held)
 
@@ -247,7 +252,7 @@ Design decisions (already made):
   it feels the same as the user's current setup. v1 supports L2 and R2 only.
 - **How the borrowed settings are stored:** an immutable `AimLayerStickSettings` object per device,
   published with `Volatile.Write` and read with `Volatile.Read`. It is built off the input thread
-  when the base profile loads, by preparing the source profile (fast thanks to 2.3) and copying
+  when the base profile loads, by preparing the source profile (~1 ms warm thanks to 2.2) and copying
   values out of a scratch store. **Never** copy them out of a live device slot.
 - **Edge cases:**
   - Missing or invalid source profile: log one warning and leave the layer off.
@@ -324,6 +329,7 @@ Tasks:
 Made 2026-10-05:
 - Quieter per-press logging (formerly task A3): **dropped**. Keep the "using Profile" log line; it costs about one line per press and is useful evidence if switching misbehaves.
 - Task 3.5: **hand-editing guide only**; editor UI deferred.
+- Task 2.3 (prepared-profile cache): **dropped**; 2.2 alone met its target.
 - Pushing: **yes**, to the user's fork (`fork` remote, `petemess95/DS4Windows`).
 
 Still open (ask the user once Phase 2 passes the Phase 4 tests):
@@ -333,15 +339,18 @@ Still open (ask the user once Phase 2 passes the Phase 4 tests):
 
 ## 6. Next session
 
-Paste this to start Phase 2:
+Paste this to start Phase 3:
 
-> Read `PLAN-fast-aim-switching.md` in `P:\codex\DS4Windows Branch` and implement Phase 2
-> (Tasks 2.1, 2.2, 2.3, in that order). Phase 1 is done: the baseline is under Task 1.1
-> (the 6 baseline classes: 89 pass; full suite: 7130 pass, 12 expected skips, 0 fail).
+> Read `PLAN-fast-aim-switching.md` in `P:\codex\DS4Windows Branch` and implement Phase 3
+> (Tasks 3.1, 3.2, 3.3, 3.4, 3.5, in that order). Phases 1 and 2 are done: Phase 2 cut warm
+> `TryPrepare` from ~105 ms to ~0.9 ms and stopped the assembly leak (Task 2.3 was dropped; see its
+> note). The current baseline is under Task 2.2: the six baseline classes plus
+> `ProfileSerializerCacheTests` give 91 pass, and the full suite with `--filter "TestCategory!=Benchmark"`
+> gives 7132 pass, 12 expected skips, 0 fail.
 >
 > Orchestrate it, and use mainly worker-complex and worker-standard agents. This work is too
 > sensitive to use the Sonnet workers for all but the most menial tasks.
 >
-> Commit after each task that passes its acceptance criteria. Once Phase 2 is complete, stop, make
-> sure all documentation is updated (including the status table and Task 2.1's benchmark numbers),
-> and write a handoff message like this one for Phase 3.
+> Commit after each task that passes its acceptance criteria. Once Phase 3 is complete, stop, make
+> sure all documentation is updated (including the status table), and write a handoff message like
+> this one for Phase 4.
