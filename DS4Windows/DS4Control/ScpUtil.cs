@@ -4855,6 +4855,9 @@ namespace DS4Windows
             aimLayerThreshold[device] = DEFAULT_AIM_LAYER_THRESHOLD;
             aimLayerSourceProfile[device] = string.Empty;
             aimLayerUseSourceLightbar[device] = false;
+            // Only the live store publishes; validation/test stores are private.
+            if (ReferenceEquals(this, Global.store))
+                AimLayerState.Clear(device);
         }
 
         private void setOutBezierCurveObjArrayItem(BezierCurve[] bezierCurveArray, int device, int curveOptionValue, BezierCurve.AxisType axisType)
@@ -5659,6 +5662,10 @@ namespace DS4Windows
                 AppLogger.LogToGui("Unauthorized Access - Save failed to path: " + path, false);
                 saved = false;
             }
+
+            // Any slot borrowing this profile's right stick must see the edit.
+            if (saved)
+                AimLayerState.OnProfileSaved(proName);
 
             return saved;
         }
@@ -6648,6 +6655,10 @@ namespace DS4Windows
                 dcs.Reset();
 
             profile.MapTo(this);
+            // Built during preparation (source read before the pause); this
+            // only swaps the reference, together with the new base profile.
+            if (ReferenceEquals(this, Global.store))
+                AimLayerState.Publish(device, prepared.AimLayer);
 
             containsCustomAction[device] = false;
             containsCustomExtras[device] = false;

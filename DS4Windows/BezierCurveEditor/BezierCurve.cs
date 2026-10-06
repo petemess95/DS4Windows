@@ -227,6 +227,25 @@ namespace DS4Windows
         internal NormalizedEvaluator CaptureEvaluator() =>
             Volatile.Read(ref normalizedEvaluator);
 
+        // Independent, already-built copy for a reader that must never see a
+        // later Init on this instance. The evaluator is immutable, so shared.
+        internal BezierCurve CloneBuilt()
+        {
+            return new BezierCurve
+            {
+                CustomDefinition = CustomDefinition,
+                axisType = axisType,
+                mX1 = mX1,
+                mY1 = mY1,
+                mX2 = mX2,
+                mY2 = mY2,
+                axisMaxDouble = axisMaxDouble,
+                axisCenterPosDouble = axisCenterPosDouble,
+                arrayBezierLUT = (byte[])arrayBezierLUT?.Clone(),
+                normalizedEvaluator = CaptureEvaluator(),
+            };
+        }
+
         /// <summary>
         /// Continuous counterpart of the GRE/Mika-N easing semantics above.
         /// The existing byte LUT, legacy solver, rounding and stick mirroring

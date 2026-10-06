@@ -319,6 +319,63 @@ Tasks:
   - Clear it when the layer is disabled or the controller is removed.
   - Acceptance: tests show the borrowed settings match the source profile's right-stick values;
     editing and saving the source profile rebuilds them; a missing source leaves them empty.
+  - **Done 2026-10-05.**
+    - New file `DS4Control/AimLayerStickSettings.cs` (namespace `DS4Windows`):
+      - `AimLayerStickSettings` (sealed, get-only): `BaseProfile`, `SourceProfile`, `Trigger`, `Threshold`,
+        `UseSourceLightbar` (from the base profile); `RSModInfo` (`StickDeadZoneInfo`, deep copy incl. x/y axis
+        infos), `RSSens`, `RSSquareStick`, `RSSquareStickRoundness`, `RSOutCurveMode`, `RSOutBezierCurve`
+        (`BezierCurve.CloneBuilt()`: own LUT copy + the immutable evaluator, no re-init/log), `LightbarColor`
+        (source `m_Led`, a struct). `IsTriggerHeld(byte l2, byte r2)` = raw trigger `> Threshold`.
+        `FromStore(request, store, device)` copies from a scratch store.
+      - `AimLayerRequest` (what the base asks for; kept even when the build fails), `AimLayerPreparation`.
+      - `AimLayerState` (static, per slot, `TEST_PROFILE_ITEM_COUNT`): **`AimLayerState.Current(device)`** =
+        `Volatile.Read` of the published reference, null = off. This is the only call for 3.3/3.4.
+        Writers: `Publish`, `Clear`, `Suspend`/`Resume`, `OnProfileSaved` (all under a per-slot lock that
+        never does I/O; the report path takes no lock).
+    - Build: `PreparedProfileLoad.TryPrepare` now also prepares the aim layer from its own validation store
+      (`AimLayerState.Prepare`): source via new `TryPrepareSource` (same parse/migrate/`MapTo` into a fresh
+      `CreateProfileValidationStore()`; the source's own `<AimLayer>` is ignored) and stores it in
+      `prepared.AimLayer`. So the source file is read wherever the base is prepared — always before
+      `TryHaltReportingRunAction`/the mutation gate — and never from a live slot. Never throws.
+    - Hooks (live store only, `ReferenceEquals(this, Global.store)`):
+      - `ApplyPreparedProfileNew`, right after `MapTo(this)`: `Publish(device, prepared.AimLayer)` — only a
+        reference swap inside the pause, so base profile and layer change together. Every production load
+        (UI/startup `LoadProfile`, `LoadTempProfile`, `GuardedProfileReload`, `GuardedNamedProfileLoad`,
+        auto-profile) goes through this. A temp profile without `<AimLayer>` publishes null; returning to
+        the base republishes.
+      - `ResetAimLayer` (from `ResetProfile`): `Clear`. Covers the missing-file fallback, blank/default
+        profiles and `SaveAsNewProfile`.
+      - `SaveProfileNew` (any store, after a successful write): `OnProfileSaved(proName)` rebuilds,
+        synchronously (~1 ms per borrowing slot; serializer already warm from the save), every slot whose
+        request borrows that name (`OrdinalIgnoreCase`). Works with no ControlService.
+      - `ControlService.ClearExactControllerSlot`: `Suspend` (publish null, keep request/built). The two
+        reconnect paths that keep the profile without reloading it (temp/auto profile, Joy-Con handoff:
+        `PrepareConnectedInputControllerProfileMappingOutput` and the Switch2 profile stage) call `Resume`.
+        Normal reconnects reload the profile, which republishes.
+    - Races: apply order is already serialized by the profile revision/mutation gate. Each slot has a
+      generation; a save-triggered rebuild only publishes if no apply/rebuild happened since it started,
+      otherwise it re-reads the request and retries (up to 4) while the slot still borrows that name, so the
+      last write wins. A global save sequence is read before `TryPrepare` reads the base; if any profile was
+      saved between prepare and apply, `Publish` queues one thread-pool rebuild. Test seam:
+      `AimLayerState.RebuildBuiltForTests`.
+    - Edge cases: disabled → null; source == base (case-insensitive) → null, no log; empty, invalid-file-name,
+      missing or invalid source → null plus one warning (`AppLogger.LogToGui(..., true)`, text starts
+      "Aim layer of profile ..."), de-duplicated per slot until a build succeeds (so temp switches back to
+      the base don't spam). The request is kept, so creating/saving the source later turns the layer on.
+    - For 3.3: read `AimLayerState.Current(device)` once per report; if non-null and
+      `IsTriggerHeld(rawL2, rawR2)`, use `RSModInfo`, `RSSens`, `RSSquareStick`/`RSSquareStickRoundness`,
+      `RSOutCurveMode`, `RSOutBezierCurve`. Use the borrowed `RSModInfo` consistently (it also decides
+      Radial-only `RSSens`). `rsMod.fuzz` feeds the stateful `filters.Right.ApplyFuzz` before the dead
+      zone — decide whether to keep the base fuzz there. For 3.4: `UseSourceLightbar` + `LightbarColor`.
+    - Note: opening a base profile in the editor (slot 8) also builds its layer, so a missing source logs
+      the warning there too.
+    - Tests: `DS4WindowsTests/AimLayerStickSettingsTests.cs`, 15 pass (match incl. Axial axis infos and
+      curve evaluation/LUT vs `0.72, 0.26, 1.00, 1.00`; R2/threshold; save rebuilds, case-insensitive;
+      missing/invalid source + single warning + later creation; source == base; disabled; temp profile
+      clears and base restores; missing base clears; independence from scratch store and live slot;
+      suspend/resume; two generation-race tests; save between prepare and apply). The three race tests
+      fail with their guard disabled. `AimLayerProfileTests` 22 pass; baseline classes 91; full suite with
+      `TestCategory!=Benchmark` **7169 pass, 12 expected skips, 0 fail**. Build: 12 pre-existing warnings.
 - **3.3 (worker-complex): runtime swap in `SetCurveAndDeadzone`.**
   - When the layer is on, take `rsMod`, `rsSens`, the RS square-stick fields, the curve mode and the
     bezier curve from the borrowed settings.

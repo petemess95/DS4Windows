@@ -48,11 +48,43 @@ namespace DS4Windows.DS4Control
         internal void QueuePostLoadAfterResume() =>
             Interlocked.Exchange(ref deferredPostLoad, null)?.Invoke();
 
+        // Aim layer borrowed from another profile, built here so the source
+        // profile is read before any report pause. Null = layer off.
+        internal AimLayerPreparation AimLayer { get; private set; }
+
         internal static bool TryPrepare(string path, int device,
             out PreparedProfileLoad prepared, out ProfilePreparationFailure failure,
             out string error)
         {
             prepared = null;
+            // Read before the file so a save that lands after this point is
+            // known to be newer than the borrowed settings.
+            long saveSequence = AimLayerState.ReadSaveSequence();
+            if (!TryPrepareCandidate(path, device, out ProfileDTO candidate,
+                    out BackingStore validation, out bool migrated, out failure, out error))
+                return false;
+            prepared = new PreparedProfileLoad(path, device, candidate, migrated)
+            {
+                AimLayer = AimLayerState.Prepare(validation, device, path, saveSequence),
+            };
+            return true;
+        }
+
+        // Prepares an aim-layer source: same validation as TryPrepare, but the
+        // mapped scratch store is returned and its own aim layer is ignored.
+        internal static bool TryPrepareSource(string path, int device,
+            out BackingStore store, out ProfilePreparationFailure failure,
+            out string error) =>
+            TryPrepareCandidate(path, device, out _, out store, out _,
+                out failure, out error);
+
+        private static bool TryPrepareCandidate(string path, int device,
+            out ProfileDTO prepared, out BackingStore validation, out bool migrated,
+            out ProfilePreparationFailure failure, out string error)
+        {
+            prepared = null;
+            validation = null;
+            migrated = false;
             failure = ProfilePreparationFailure.None;
             error = null;
             if ((uint)device >= Global.TEST_PROFILE_ITEM_COUNT)
@@ -61,7 +93,6 @@ namespace DS4Windows.DS4Control
             try
             {
                 string xml;
-                bool migrated;
                 using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read))
                 {
                     var migration = new ProfileMigration(stream);
@@ -95,8 +126,10 @@ namespace DS4Windows.DS4Control
                 // Deserialization alone does not parse colors/macros or exercise
                 // mapping conversions. Do not duplicate those rules in a validator.
                 // Never ResetProfile on the shadow: that has live Mapping effects.
-                candidate.MapTo(BackingStore.CreateProfileValidationStore());
-                prepared = new PreparedProfileLoad(path, device, candidate, migrated);
+                BackingStore store = BackingStore.CreateProfileValidationStore();
+                candidate.MapTo(store);
+                prepared = candidate;
+                validation = store;
                 return true;
             }
             catch (Exception ex) when (ex is FileNotFoundException ||
@@ -118,6 +151,7 @@ namespace DS4Windows.DS4Control
                 failure = ProfilePreparationFailure.Invalid;
                 error = ex.InnerException?.Message ?? ex.Message;
             }
+            migrated = false;
             return false;
         }
 

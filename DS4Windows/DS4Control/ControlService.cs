@@ -3874,6 +3874,9 @@ namespace DS4Windows
             else
             {
                 StartupDiag($"LoadProfile skipped for auto/temp profile index={index} tempProfile=\"{tempprofilename[index]}\"");
+                // The kept profile is not re-applied, so its aim layer is not
+                // republished by a load; bring back what removal suspended.
+                AimLayerState.Resume(index);
             }
 
             if (profileLoaded || useAutoProfile)
@@ -5119,6 +5122,7 @@ namespace DS4Windows
             device.Synced = false;
             Mapping.RequestPostMapStickReset(index);
             Mapping.ResetFlickStickCalibration(index);
+            AimLayerState.Suspend(index);
             oscState[index] = new DS4State();
             slotManager.RemoveController(device, index);
             if (isUsingOSCSender())
@@ -6997,6 +7001,11 @@ namespace DS4Windows
                         lastPrepareDiagnostic = "profile-loading";
                         profileLoaded = LoadProfile(slot, false, service,
                             false, false);
+                    }
+                    else
+                    {
+                        // Kept profile: no load republishes its aim layer.
+                        AimLayerState.Resume(slot);
                     }
 
                     if (profileLoaded)
