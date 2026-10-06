@@ -169,6 +169,29 @@ Do the phases in order. Tasks are numbered `<phase>.<step>`.
   - Use small test profiles under `DS4WindowsTests` (copy the right-stick curve values above), not
     the user's files.
   - Return the numbers.
+  - **Done 2026-10-05** (`DS4WindowsTests/ProfileSwitchCostBenchmark.cs`, no production changes).
+    - Run: `dotnet test ... --no-build --filter "FullyQualifiedName~ProfileSwitchCostBenchmark" -nologo --logger "console;verbosity=detailed"`.
+      Exclude from normal runs with `--filter "TestCategory!=Benchmark"`.
+    - Profiles: no fixture XML exists, so the test saves two full profiles (~17.8 KB each) the way
+      `SaveProfileNew` does, one RS `linear`, one RS `custom` `0.72, 0.26, 1.00, 1.00`, in a `%TEMP%`
+      folder, and alternates between them. 5 warm-up + 40 timed calls per stage.
+    - `MeasureTryPrepare(paths)` returns average wall/CPU ms and assembly counts, for 2.2/2.3 checks.
+    - Results before Phase 2 (two stable runs; two earlier runs under machine load were ~30 ms higher on e):
+
+      | Stage | Avg wall ms | Avg CPU ms |
+      |---|---|---|
+      | a. file read + `ProfileMigration` | 0.11–0.13 | < 0.4 (timer resolution) |
+      | b. `new XmlSerializer(ProfileDTO, overrides)` | 48.7–50.4 | 52.7–53.9 |
+      | c. `Deserialize`, reused serializer | 0.45–0.51 | < 0.4 |
+      | bc. new serializer + its first `Deserialize` | 104.6–106.2 | 103.5–105.1 |
+      | d. `MapTo(CreateProfileValidationStore())` | 0.26–0.27 | — |
+      | e. full `TryPrepare` (warm) | 104.9–106.0 | 102.7–103.5 |
+
+    - Assembly count grows by exactly **+1 per `TryPrepare`** (186 → 231 over 45 calls).
+    - Finding: almost all the cost is the per-call serializer. The constructor is about half; the first
+      `Deserialize` on each new serializer (generated-code compile/JIT) is the other half. Migration,
+      warm deserialize and the validation `MapTo` together are under 1.5 ms, so 2.2 alone should bring
+      `TryPrepare` to ~1–2 ms; 2.3 mainly removes the remaining file read and validation work.
 - **2.2 (worker-standard): build the serializer once and reuse it.**
   - Add one shared, thread-safe instance (for example `ProfileDTO.Serializer`, a
     `static readonly Lazy<XmlSerializer>` built with `GetAttributeOverrides()`).
