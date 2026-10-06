@@ -273,6 +273,44 @@ Tasks:
     update it only if it is.
   - Acceptance: a save-then-load test keeps every field. A profile without `<AimLayer>` loads with the
     layer off. Existing `ProfileTests` and `ProfileMigrationTests` still pass.
+  - **Done 2026-10-05.**
+    - `BackingStore` (`ScpUtil.cs`, after the DualSense options): per-device arrays `aimLayerEnabled`,
+      `aimLayerTrigger`, `aimLayerThreshold`, `aimLayerSourceProfile`, `aimLayerUseSourceLightbar`;
+      constants `DEFAULT_AIM_LAYER_TRIGGER` (`L2`), `DEFAULT_AIM_LAYER_THRESHOLD` (100);
+      `NormalizeAimLayerTrigger`; private `ResetAimLayer`, called from `ResetProfile`. Read-only Global
+      array accessors `AimLayerEnabled`, `AimLayerTrigger`, `AimLayerThreshold`, `AimLayerSourceProfile`,
+      `AimLayerUseSourceLightbar` (like `GameBarProfileName`).
+    - XML (`ProfileDTO.cs`: class `AimLayerSettingsDTO`, property `ProfileDTO.AimLayer`, written after `<TriggerLab>`;
+      element order does not matter on load):
+      ```xml
+      <AimLayer>
+        <Enabled>True</Enabled>
+        <Trigger>L2</Trigger>            <!-- L2 or R2 -->
+        <Threshold>100</Threshold>       <!-- 0-255; layer on when trigger > threshold -->
+        <SourceProfile>Edge Expo</SourceProfile>
+        <UseSourceLightbar>True</UseSourceLightbar>
+      </AimLayer>
+      ```
+      Any child may be left out (default used). Omitted on save while all five values are default, like
+      `<AudioHaptics>`/`<TriggerLab>`, so existing profiles save byte-for-byte as before; a disabled block
+      that names a source is still written. `MapTo` always writes all five fields (from a default DTO when
+      the element is missing), so a profile without `<AimLayer>` clears a slot that had the layer on.
+    - Lenient parsing (the block is hand-edited): bools via `StrToBool` (any case; bad → false); trigger is
+      case-insensitive, anything other than L2/R2 (or unparsable) → **L2**; threshold not 0–255 → 100;
+      `SourceProfile` is trimmed. Bad values never reject the profile.
+    - Threshold check: `GetBoolMappingExternal` uses `cState.L2 > 100`; `getBoolSpecialActionMapping` uses
+      `fieldMap.triggers[...] > 100`, but on the state *after* `SetCurveAndDeadzone` (L2 dead zone, max
+      zone, sensitivity, curve applied). Default 100 matches; with default L2 settings processed == raw.
+    - Old `XmlDocument` path: **not used in production**. Instance `LoadProfile` (~6770) has no callers;
+      `SaveProfileOld` is only called from it and from `AxisFlickCalibrationSettingsTests`. Not updated.
+    - Copy paths: none need changes. The validation store is a fresh `BackingStore` filled by `MapTo`;
+      `ApplyPreparedProfileNew` does `ResetProfile` + `MapTo`; preset/blank profiles call `ResetProfile`;
+      no slot-to-slot copy helper exists.
+    - Tests: `DS4WindowsTests/AimLayerProfileTests.cs`, 22 pass (round trip with R2/180, omitted when
+      default, missing element → defaults, missing element clears a previous layer, `MapTo` alone clears,
+      `ResetProfile`, the sample block above, trigger/threshold fallbacks). Baseline classes 91/91 (113 with
+      the filter as written, since `~ProfileTests` also matches the new class); full suite with
+      `TestCategory!=Benchmark` **7154 pass, 12 expected skips, 0 fail**. Build: 12 pre-existing warnings, none new.
 - **3.2 (worker-complex): build and publish the borrowed settings.**
   - Add `AimLayerStickSettings` (immutable) and a per-device published reference.
   - Build it during profile apply as described above, without blocking the report-pause window. Keep

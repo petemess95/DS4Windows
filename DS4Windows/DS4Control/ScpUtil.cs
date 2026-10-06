@@ -3038,6 +3038,12 @@ namespace DS4Windows
             set => m_Config.gameBarProfileName = value;
         }
 
+        public static bool[] AimLayerEnabled => m_Config.aimLayerEnabled;
+        public static DS4Controls[] AimLayerTrigger => m_Config.aimLayerTrigger;
+        public static byte[] AimLayerThreshold => m_Config.aimLayerThreshold;
+        public static string[] AimLayerSourceProfile => m_Config.aimLayerSourceProfile;
+        public static bool[] AimLayerUseSourceLightbar => m_Config.aimLayerUseSourceLightbar;
+
         public static bool[] DualSenseMuteButtonLightEnabled
         {
             get => m_Config.dualSenseMuteButtonLightEnabled;
@@ -4815,6 +4821,41 @@ namespace DS4Windows
         public string[] dualSenseMuteOffProfileName = new string[Global.TEST_PROFILE_ITEM_COUNT] { "", "", "", "", "", "", "", "", "" };
         //
         // End of DualSense specific profile options
+
+        // Aim layer: while the trigger is held, the right stick borrows the
+        // stick settings of aimLayerSourceProfile (no profile switch).
+        public const DS4Controls DEFAULT_AIM_LAYER_TRIGGER = DS4Controls.L2;
+        // Matches the special-action digital trigger test (L2/R2 > 100).
+        public const byte DEFAULT_AIM_LAYER_THRESHOLD = 100;
+        public bool[] aimLayerEnabled = new bool[Global.TEST_PROFILE_ITEM_COUNT] { false, false, false, false, false, false, false, false, false };
+        public DS4Controls[] aimLayerTrigger = new DS4Controls[Global.TEST_PROFILE_ITEM_COUNT]
+        {
+            DEFAULT_AIM_LAYER_TRIGGER, DEFAULT_AIM_LAYER_TRIGGER, DEFAULT_AIM_LAYER_TRIGGER,
+            DEFAULT_AIM_LAYER_TRIGGER, DEFAULT_AIM_LAYER_TRIGGER, DEFAULT_AIM_LAYER_TRIGGER,
+            DEFAULT_AIM_LAYER_TRIGGER, DEFAULT_AIM_LAYER_TRIGGER, DEFAULT_AIM_LAYER_TRIGGER,
+        };
+        public byte[] aimLayerThreshold = new byte[Global.TEST_PROFILE_ITEM_COUNT]
+        {
+            DEFAULT_AIM_LAYER_THRESHOLD, DEFAULT_AIM_LAYER_THRESHOLD, DEFAULT_AIM_LAYER_THRESHOLD,
+            DEFAULT_AIM_LAYER_THRESHOLD, DEFAULT_AIM_LAYER_THRESHOLD, DEFAULT_AIM_LAYER_THRESHOLD,
+            DEFAULT_AIM_LAYER_THRESHOLD, DEFAULT_AIM_LAYER_THRESHOLD, DEFAULT_AIM_LAYER_THRESHOLD,
+        };
+        public string[] aimLayerSourceProfile = new string[Global.TEST_PROFILE_ITEM_COUNT] { "", "", "", "", "", "", "", "", "" };
+        public bool[] aimLayerUseSourceLightbar = new bool[Global.TEST_PROFILE_ITEM_COUNT] { false, false, false, false, false, false, false, false, false };
+
+        // v1 only reads analog L2/R2. Any other control (hand-edited or from a
+        // newer build) falls back to L2 rather than failing the profile load.
+        public static DS4Controls NormalizeAimLayerTrigger(DS4Controls trigger) =>
+            trigger == DS4Controls.R2 ? DS4Controls.R2 : DEFAULT_AIM_LAYER_TRIGGER;
+
+        private void ResetAimLayer(int device)
+        {
+            aimLayerEnabled[device] = false;
+            aimLayerTrigger[device] = DEFAULT_AIM_LAYER_TRIGGER;
+            aimLayerThreshold[device] = DEFAULT_AIM_LAYER_THRESHOLD;
+            aimLayerSourceProfile[device] = string.Empty;
+            aimLayerUseSourceLightbar[device] = false;
+        }
 
         private void setOutBezierCurveObjArrayItem(BezierCurve[] bezierCurveArray, int device, int curveOptionValue, BezierCurve.AxisType axisType)
         {
@@ -11281,6 +11322,7 @@ namespace DS4Windows
             outputDevType[device] = DEFAULT_OUT_CONT_TYPE;
             audioHapticsSettings[device] = new AudioHapticsProfileSettings();
             triggerLabSettings[device] = new TriggerLabProfileSettings();
+            ResetAimLayer(device);
             ds4Mapping = false;
         }
 
