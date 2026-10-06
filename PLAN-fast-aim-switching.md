@@ -459,6 +459,13 @@ Tasks:
   - The element names in the doc must exactly match what 3.1 implemented. Check against
     `ProfileDTO.cs`, and include a test-backed sample if one exists.
   - Editor UI is deferred. Revisit it only if the user asks after trying the aim layer.
+  - **Done 2026-10-05.**
+    - `docs/aim-layer.md`: behaviour, swapped/kept RS settings (checked against `SetCurveAndDeadzone` and
+      `AimLayerStickSettings`; fuzz kept on the base, flick stick unaffected), the `<AimLayer>` table with
+      defaults and fallbacks (names checked against `AimLayerSettingsDTO`; sample = `SampleAimLayerXml`),
+      placement + Edge Linear example, close-DS4Windows/backup warning, save behaviour, removing the old
+      switch action, lightbar precedence, missing-source warning text, raw vs processed threshold.
+    - No docs index links individual guides (README only links `docs/getting-started.md`); no link added.
 
 ### Phase 4: Testing
 - **4.1 (orchestrator):**
