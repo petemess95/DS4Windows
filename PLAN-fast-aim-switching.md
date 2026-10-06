@@ -25,8 +25,11 @@ Deliverables, in order:
 ## 2. Context (already established; do not re-investigate)
 
 ### Repository
-- `P:\codex\DS4Windows Branch` is a clone of https://github.com/hbashton/DS4Windows, branch `main`
+- `P:\codex\DS4Windows Branch` is a clone of https://github.com/hbashton/DS4Windows, based on `main`
   @ `3650240` ("Prepare RC4.6.6…"). Version 5.0.12.0 / `VIIPERRC4.6.6`.
+- Remotes: `origin` = hbashton/DS4Windows (upstream); `fork` = https://github.com/petemess95/DS4Windows
+  (the user's fork).
+- Work happens on branch `fast-aim-switching`, which already exists, tracks `fork`, and contains this plan.
 - The user's installed copy (`C:\Program Files\DS4Windows`) is the **same version**, RC4.6.6.
 - Target is `net8.0-windows10.0.19041.0`, x64. .NET SDK 10.0.301 is installed and builds it.
 - Build (known to work, a few minutes):
@@ -102,14 +105,15 @@ Deliverables, in order:
 - Match the surrounding code's style. The fork uses short "why" comments, `Volatile`/`Interlocked`
   for state shared between threads, and per-device arrays sized `Global.TEST_PROFILE_ITEM_COUNT`.
 - Never allocate or take a lock in `SetCurveAndDeadzone`; it runs on every input report (up to ~1000/s).
-- Commit after each task that passes its criteria. Do not push or open pull requests without asking
-  the user.
+- Commit after each task that passes its criteria.
+- The user approved pushing `fast-aim-switching` to `fork`. Never push to `origin`, and don't open
+  pull requests without asking the user.
 
 ## 4. Phases and tasks
 
 ### Phase 0: Setup
 - **0.1 (orchestrator, inline).**
-  - `git checkout -b fast-aim-switching` from `main`.
+  - Confirm `fast-aim-switching` is checked out and clean.
   - Build, then run the baseline tests: `ProfileLoadPreparationTests`, `ProfileMigrationTests`,
     `ProfileTests`, `TemporaryProfileIntentTests`, `ProfileSwitchInputContinuityTests`,
     `DS4StickProfileTransformTests`.
@@ -167,11 +171,8 @@ Deliverables, in order:
       DTO each time; a migrated profile is re-read after the auto-save rewrites it; a missing or
       invalid file still fails the same way as before (`ProfilePreparationFailure` values unchanged).
     - Baseline tests are no worse than in 0.1.
-- **A3 (worker-mechanical, optional; ask the user first): quieter per-press logging.**
-  - For automatic-untrigger profile actions only, stop writing the "using Profile" line on every
-    press (`Mapping.cs:5182–5186`). Either log only the first activation per hold or drop it to a
-    debug level.
-  - Leave the tray-toast setting (`ProfileChangedNotification`) as it is.
+- **A3: dropped (user decision, 2026-10-05).** Keep the per-press "using Profile" log line as it is.
+  It costs about one line per press, and it's useful evidence if switching misbehaves again.
 
 ### Part B: aim layer (right-stick settings swap while L2 is held)
 
@@ -233,14 +234,19 @@ Tasks:
   - When `aimLayerUseSourceLightbar` is set and the layer is on, show the source profile's main
     colour (keep it in the borrowed settings) wherever `DS4LightBar` picks `m_Led`.
   - Don't change flashing or battery-indicator behaviour.
-- **B5 (worker-complex): profile editor UI.**
-  - Find the right-stick or "Other" section of the profile editor (`DS4Forms/ProfileEditor*.xaml`
-    and its view model).
-  - Add: an "Aim layer" checkbox; a source-profile dropdown (existing profiles, excluding the current
-    one); a trigger dropdown (L2/R2); a threshold slider (0–255); a "Use source lightbar colour"
-    checkbox.
-  - Acceptance: the settings save and reload through the editor; the build passes; nothing else in
-    the editor layout breaks. (v1 can ship before this, set by editing the XML by hand.)
+- **B5 (worker-mechanical): hand-editing guide. No editor UI (user decision, 2026-10-05).**
+  - Write `docs/aim-layer.md`. It should cover:
+    - what the aim layer does, and which right-stick settings it swaps and which it keeps;
+    - the exact `<AimLayer>` XML block from B1, with every field, its allowed values and its default;
+    - where to put it in a profile, with the user's own example (Edge Linear borrowing from
+      "Edge Expo", L2, threshold 100, source lightbar on);
+    - **Close DS4Windows before editing a profile file**, or it may overwrite the change;
+    - once B1 is in, saving the profile from the normal editor keeps the block;
+    - remove any old hold-to-switch profile action for the same trigger;
+    - what happens if the source profile is missing, and where the warning appears.
+  - The element names in the doc must exactly match what B1 implemented. Check against
+    `ProfileDTO.cs`, and include a test-backed sample if one exists.
+  - Editor UI is deferred. Revisit it only if the user asks after trying the aim layer.
 
 ### Phase 3: Verification
 - **3.1 (orchestrator):**
@@ -250,17 +256,22 @@ Tasks:
   1. **Part A alone.** Keep the existing "Switch 2 Edge Expo" action.
      - Rapid L2 taps (under 150 ms), holds of 1–2 s, and alternating quickly for 30 s.
      - In Task Manager, DS4Windows CPU should stay near idle.
-     - The log should show one line per press (or per hold if A3 was done).
+     - The log should show one line per press.
      - The curve should feel correct on quick taps.
-  2. **Part B.** In Edge Linear, set the aim layer to source "Edge Expo", trigger L2, threshold 100,
-     use source lightbar on. **Remove** the "Switch 2 Edge Expo" action from Edge Linear.
+  2. **Part B.** With DS4Windows closed, follow `docs/aim-layer.md` to add the `<AimLayer>` block to
+     Edge Linear: source "Edge Expo", trigger L2, threshold 100, source lightbar on. **Remove** the
+     "Switch 2 Edge Expo" action from Edge Linear.
      - Repeat the same tests: the curve should change instantly and the lightbar should switch to
        white while aiming.
      - The game's ADS should behave exactly as before.
 
-## 5. Open decisions for the user
-- A3 (quieter logging): yes or no?
-- Pushing: create a personal GitHub fork and push `fast-aim-switching`? Offer Part A upstream to
-  `hbashton/DS4Windows` as a pull request (recommended, because the fork changes this area often
-  and a merged fix avoids rebasing it every release)?
-- Should v1 ship B5 (editor UI) or start with editing the XML by hand?
+## 5. Decisions
+Made 2026-10-05:
+- A3 (quieter logging): **dropped**.
+- B5: **hand-editing guide only**; editor UI deferred.
+- Pushing: **yes**, to the user's fork (`fork` remote, `petemess95/DS4Windows`).
+
+Still open (ask the user once Part A passes Phase 3):
+- Offer Part A to `hbashton/DS4Windows` as a pull request? Recommended: upstream changes this area
+  often, and a merged fix avoids redoing it every release. Leave this plan file out of that pull
+  request.
