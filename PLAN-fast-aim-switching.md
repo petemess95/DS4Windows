@@ -4,8 +4,8 @@ Written 2026-10-05.
 
 **Status (2026-10-06):** Phases 1–4 are done (results under Tasks 1.1, 2.1, 2.2, 3.1–3.5, 4.1 and
 4.2; Task 2.3 was dropped, see its note). Phase 2 and the aim layer both passed on the user's DualSense
-Edge. The upstream pull request branch is prepared (section 5). **Phase 5 (hipfire layer) is planned
-and not started.**
+Edge. The upstream pull request branch is prepared (section 5). **Phase 5 (hipfire layer): Tasks 5.1–5.4
+done 2026-10-06; 5.5 (user hardware test) is next.**
 
 ---
 
@@ -123,7 +123,7 @@ Deliverables, in order:
 | 2. Faster profile switching | Cut each switch from ~150 ms to a few ms; stop the leak | 2.1–2.3 | Done 2026-10-05 (2.3 dropped; warm `TryPrepare` ~105 ms → ~0.9 ms) |
 | 3. Aim layer | Swap right-stick settings while L2 is held, with no profile switch | 3.1–3.5 | Done 2026-10-05 (`749f3d8`…`c2db58a`; guide in `docs/aim-layer.md`) |
 | 4. Testing | Full test run, then you test on the controller | 4.1, 4.2 | Done 2026-10-06 (all pass; no fixes needed) |
-| 5. Hipfire layer | Several aim layers per profile, first match wins, with an optional hold delay (R2 → Edge Hipfire after 100 ms, L2 still wins) | 5.1–5.5 | Planned 2026-10-06 |
+| 5. Hipfire layer | Several aim layers per profile, first match wins, with an optional hold delay (R2 → Edge Hipfire after 100 ms, L2 still wins) | 5.1–5.5 | 5.1–5.4 done 2026-10-06 (`9da1d4b`, `0ece443`, `e321d2f`); 5.5 pending |
 
 Do the phases in order. Tasks are numbered `<phase>.<step>`.
 
@@ -628,6 +628,10 @@ place as now, before `cState` is replaced):
       trigger is held, which gives the same behaviour as today for one layer). Real selection is 5.2.
     - Full suite `TestCategory!=Benchmark`: 0 fail, same 12 skips.
   - Return: design summary (types, where the list lives), files changed, test counts, anything 5.2 must know.
+  - **Done 2026-10-06 at `9da1d4b`.** Immutable `AimLayerConfig` list per device (`BackingStore.aimLayers`, max 4,
+    replaced whole); published as an immutable `AimLayerSet` (built layers in file order, each with `LayerIndex`).
+    Per-layer warnings include the trigger; save-rebuild touches only layers borrowing the saved source. Single-block
+    save checked byte-identical to the previous build. 36 new tests; suite 7217 pass, 12 skips, 0 fail.
 - **5.2 (worker-complex): runtime selection with delay, and the lightbar.**
   - Files: `DS4Control/Mapping.cs` (`SetCurveAndDeadzone` only), `DS4Control/AimLayerStickSettings.cs`
     (per-device timer state, the active-layer handoff to the lightbar), `DS4Control/DS4LightBar.cs` only if
@@ -654,6 +658,13 @@ place as now, before `cState` is replaced):
       must fail at least one test.
     - Full suite: 0 fail, same 12 skips.
   - Return: what changed, test names/counts, mutation-check results.
+  - **Done 2026-10-06 at `0ece443`.** `AimLayerState.Select` keeps preallocated per-slot held-since timers (by
+    position in the set) and a last-seen set reference; any new set reference resets them (`Resume`/re-publish now
+    publish a renewed wrapper so reconnects also reset). The active layer is a `Volatile` write read by
+    `MainLightbarColor` (null set still wins); `SetHeld` removed. Clock: one Stopwatch read per report, forwarded to an
+    internal `SetCurveAndDeadzone(..., long nowMs)` overload. 14 new tests (`AimLayerSelectionTests` 10, lightbar 4);
+    0 bytes over 20,000 warm calls. Mutations: restarting R2's timer on L2 release failed 7 tests; deciding from
+    processed triggers failed 5. Suite 7231 pass, 12 skips, 0 fail.
 - **5.3 (worker-standard): update `docs/aim-layer.md`.**
   - Several blocks, file order = priority (first ready wins), `<Delay>` (row in the table, default 0,
     0–1000 ms, bad → 0), the 4-layer cap, per-layer source warnings, the threshold-vs-game-fire-point note,
@@ -661,8 +672,13 @@ place as now, before `cState` is replaced):
   - The user's full example: Edge Linear with the L2 → Edge Expo block first, then R2 → Edge Hipfire,
     `Threshold 100`, `Delay 100`, `UseSourceLightbar True`, and the selection table from this phase.
   - The two-block sample must be loaded by a test (add it next to `SampleAimLayerXml` if 5.1 didn't).
+  - **Done 2026-10-06 at `e321d2f`.** Doc samples match `SampleAimLayerXml` / `SampleTwoAimLayersXml`.
 - **5.4 (orchestrator):** full suite `TestCategory!=Benchmark` (record counts), Release build, record DLL
   path/size/SHA-256 for 5.5. Push `fast-aim-switching` to `fork`.
+  - **Done 2026-10-06.** Full suite `TestCategory!=Benchmark`: **7231 pass, 12 expected skips, 0 fail** (1 m 38 s).
+    Release build 0 errors, no new warnings. DLL `DS4Windowsind\Release
+et8.0-windows10.0.19041.0\DS4Windows.dll`,
+    11,017,728 bytes, SHA-256 `e0d61d4be263fde54495bf18165cc4031c2d7d9fdb2f54c681c307747511087f`.
 - **5.5 (the user, on hardware, DLL-swap method from 1.2):**
   1. In DS4Windows, give **Edge Hipfire** its own lightbar colour and save it. Close DS4Windows. Back up
      `Profiles\Edge Linear.xml`.
@@ -690,9 +706,8 @@ opens the PR from the GitHub compare page with the prefilled title/body. Origina
 
 ## 6. Next session
 
-Phases 1–4 are done and the upstream pull request branch is prepared (section 5). Next is **Phase 5
-(hipfire layer)**: run 5.1 → 5.2 → 5.3 in order (they share files), then 5.4, then hand 5.5 to the user.
-Kickoff message:
+Phases 1–4 and Tasks 5.1–5.4 are done. Next is **Task 5.5** (the user's hardware test). After it, record the
+result under 5.5. Kickoff message:
 
-> Implement Phase 5 of `PLAN-fast-aim-switching.md` (Tasks 5.1–5.4) as orchestrator. The selection rule and
-> the user's decisions are at the top of Phase 5; don't re-ask them. End with the 5.5 hardware steps.
+> Phase 5 of `PLAN-fast-aim-switching.md`: I ran the 5.5 hardware test. Here are the results: <results>.
+> Record them and fix anything that failed, as orchestrator.
