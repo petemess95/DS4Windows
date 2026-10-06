@@ -5,7 +5,8 @@ Written 2026-10-05.
 **Status (2026-10-06):** Phases 1–4 are done (results under Tasks 1.1, 2.1, 2.2, 3.1–3.5, 4.1 and
 4.2; Task 2.3 was dropped, see its note). Phase 2 and the aim layer both passed on the user's DualSense
 Edge. The upstream pull request branch is prepared (section 5). **Phase 5 (hipfire layer): Tasks 5.1–5.4
-done 2026-10-06; 5.5 (user hardware test) is next.**
+done 2026-10-06; 5.5 (user hardware test) is next.** Phase 6 (better gyro aiming while
+aiming down sights) planned 2026-10-06; it starts after 5.5.
 
 ---
 
@@ -124,6 +125,7 @@ Deliverables, in order:
 | 3. Aim layer | Swap right-stick settings while L2 is held, with no profile switch | 3.1–3.5 | Done 2026-10-05 (`749f3d8`…`c2db58a`; guide in `docs/aim-layer.md`) |
 | 4. Testing | Full test run, then you test on the controller | 4.1, 4.2 | Done 2026-10-06 (all pass; no fixes needed) |
 | 5. Hipfire layer | Several aim layers per profile, first match wins, with an optional hold delay (R2 → Edge Hipfire after 100 ms, L2 still wins) | 5.1–5.5 | 5.1–5.4 done 2026-10-06 (`9da1d4b`, `0ece443`, `e321d2f`); 5.5 pending |
+| 6. Gyro aiming | Better gyro-to-stick for small corrections while aiming; every change off by default and byte-identical when off | 6.1–6.9 | Planned 2026-10-06; starts after 5.5 |
 
 Do the phases in order. Tasks are numbered `<phase>.<step>`.
 
@@ -688,6 +690,152 @@ place as now, before `cState` is replaced):
   4. In game: movement and shotgun fights feel linear; sprays get the mild curve; ADS as before. If
      deliberate shotgun shots flash the Hipfire colour, raise `<Delay>` (e.g. 150) by hand.
 
+### Phase 6: Better gyro aiming while aiming down sights (gyro → right stick)
+
+**Goal (user, 2026-10-06).** Make gyro "mouse-joystick" output (gyro turned into right-stick movement while
+L2 is held) better for small corrections while aiming. **Hard rule: every change is off by default, and
+with it off the output is byte-for-byte what it is today.** Start Phase 6 only after 5.5 has passed.
+
+**Today's behaviour (investigated 2026-10-06; do not re-investigate).**
+- Gyro mode `MouseJoystick` runs `Mouse.SixMouseStickCore` (`DS4Control/Mouse.cs:858`) on every motion
+  report while the trigger is held (branch at `Mouse.cs:455`, trigger check `IsGyroTriggerActive` at `:514`).
+  Pipeline: gyro counts (16 counts = 1 °/s; `DS4Sixaxis.GYRO_RES_IN_DEG_SEC`) → hard deadzone subtracted
+  per axis, scaled by `normX`/`normY` (default 30 ≈ 1.9 °/s) → clamp to `maxZone` (830 ≈ 52 °/s = full
+  stick) → Switch 2-only modifier → jitter compensation (hard-coded `threshold = 2`) → smoothing (One Euro or
+  weighted average) → vertical scale → ratio → max output → anti-deadzone `(1 - anti) * ratio + anti`
+  (default 0.4) → invert → **byte** → `PostMapStickData.TrySubmit`.
+- Several `int` truncations along the way, and the final value is a legacy byte (`FromLegacy`), even
+  though the fork has a high-resolution axis (`DS4MappedStickAxis.TryFromProfileCoordinate`, 16-bit on
+  Xbox output at `ViiperOutDevice.cs:13574`). The user's output is `ViiperDS4`, whose sticks are bytes on
+  the wire (`ViiperOutDevice.cs:13228`): after a 0.4 anti-deadzone there are ~76 usable steps, ~0.7 °/s each.
+- Gyro and the real right stick are merged with `SelectStronger` per axis (`Mapping.cs:519` `MergeAxisNoLock`,
+  `:530` `ApplyTo`, `:543` `TryApplyCurrentGyro`; `DS4MappedStickAxis.cs:75`): the larger deflection wins
+  per axis and the other is dropped. With the anti-deadzone, any gyro motion just past the deadzone outputs
+  ~40% and beats a lightly held stick. The same merge also serves touchpad mouse-joystick.
+- `ApplyPostMapStickData` runs after the right-stick curve (`Mapping.cs:3415`), so gyro output bypasses
+  the RS curve and aim layer. `TempMouseJoystick` (`Mapping.cs:3728`, called at `ControlService.cs:6197`)
+  re-applies the current gyro value.
+- Settings live in `GyroMouseStickInfo` (`ProfilePropGroups.cs:330`, `Reset()` at `:424`), one per device in
+  `BackingStore.gyroMStickInfo` (`ScpUtil.cs:4981`). XML in `ProfileDTO.cs` (`GyroMouseStick*` elements
+  ~1900–2000, `MapFrom` ~2733, `MapTo` ~3613).
+- **The user's profiles don't use gyro today** (all four have `GyroOutputMode Controls`, `GyroMouseStickTriggers
+  -1`, touchpad `Mouse`/`Controls`). So 6.2–6.6 can't change their current setup; only 6.7 touches code they use.
+
+**New per-profile settings (all inside `GyroMouseStickInfo`; no new per-device arrays).**
+
+| XML element | Values | Default (= today) | Effect |
+|---|---|---|---|
+| `GyroMouseStickSoftDeadZone` | counts, 0–400 | 0 (skipped) | Below this speed, scale output by speed / threshold instead of cutting to zero (tightening). Applied to the vector length, after the hard deadzone. Users set `GyroMouseStickDeadZone 0` to replace the hard deadzone with it. |
+| `GyroMouseStickGameCurve` | 1.0–4.0 | 1.0 (skipped when exactly 1.0) | The game's own stick-curve exponent. Output ratio becomes `ratio^(1/k)` on the vector length, so camera speed follows hand speed. |
+| `GyroMouseStickActivationRamp` | ms, 0–500 | 0 (skipped) | After gyro switches on, gain eases 0 → 1 linearly over this time, timed by summed `sixAxis.elapsed` (deterministic). Hides a possible jolt from squeezing L2. |
+| `GyroMouseStickPrecision` | `Legacy`, `HighRes`, `Dither` | `Legacy` | `Legacy` = today's byte path. `HighRes` = no `int` truncation, submits a high-resolution axis (for Xbox/Switch output). `Dither` = high-resolution maths, then error-diffusion to a byte each report (for DS4 output). |
+| `GyroMouseStickBlend` | `Stronger`, `Add` | `Stronger` | `Add` = gyro adds to the real right stick instead of replacing it per axis (6.6). |
+
+Bad or out-of-range values fall back to the default and never fail the load (like the other fields).
+Save writes each element only when it isn't the default, so an unchanged profile saves byte-identical.
+Hand-editing only, like the aim layer (decision for 3.5); no editor UI in this phase.
+
+**Pipeline order with everything on** (fixes where each step goes; with all defaults it must reduce to
+today's exact operations): hard deadzone → soft deadzone → Switch 2 modifier → jitter compensation →
+smoothing → vertical scale → ratio → activation ramp gain → game curve → max output → anti-deadzone →
+invert → output (Legacy byte / high-resolution / dithered byte).
+
+**Other things considered.**
+- **Disabled = identical.** Each new step is wrapped in an `if` on its setting, never "multiply by a neutral
+  value", because floating-point changes would move some outputs by one byte.
+- **Units.** New deadzone setting uses counts like `GyroMouseStickDeadZone`; the guide gives °/s too.
+- **Dither and the game's frame rate.** The controller reports at ~250–1000 Hz and games read at 60–144 Hz,
+  so the game only samples some of the dithered values. Averaging should still hold, but this needs checking
+  on hardware (6.9).
+- **Add blend and the anti-deadzone.** Adding two values that each already contain the anti-deadzone would
+  double it. In `Add`, the gyro submits its value **before** the anti-deadzone, and the merge removes the
+  anti-deadzone from the stick value, adds, then applies it once. The gyro's `antiDeadX/Y` stands in for the
+  game's deadzone. Assumption to document: the RS anti-deadzone should be set to the same value.
+- **Hot path.** No allocation or locks added to `SixMouseStickCore` or the merge (they run on every report).
+- **Unchanged:** gyro `Mouse`, `Controls` and `DirectionalSwipe` modes, touchpad mouse-joystick (always
+  `Stronger`), Switch 2 modifiers and locks, the aim layer when it has no gyro element.
+
+- **6.1 (worker-complex): pull the maths out and pin today's output.**
+  - Files: `DS4Control/Mouse.cs` (`SixMouseStickCore`, `SixMouseReset`), a new `DS4Control/GyroMouseStickMath.cs`,
+    new tests `DS4WindowsTests/GyroMouseStickMathTests.cs` and `DS4WindowsTests/LegacyGyroMouseStickOracle.cs`.
+  - Move the calculation (deadzone through output byte) into a static method that takes the inputs, the
+    settings, the modifier and a filter/buffer state struct, and returns the output. `SixMouseStickCore` keeps
+    reading globals and submitting. **Pure refactor: no behaviour change.**
+  - The oracle is a verbatim copy of today's method body (modelled on `LegacyStickProfileOracle.cs`). Tests run
+    both over a grid and random inputs (fixed seed, ≥ 100,000 reports): gyro values across ±2000 counts,
+    `elapsed` 1–8 ms, every smoothing method, jitter on/off, vertical scale, max output, invert flags, axis
+    choices, non-zero modifier. They also run multi-report sequences so filter state is compared.
+  - Acceptance: oracle and new code byte-identical on every case; zero allocation over 20,000 warm calls;
+    full suite `TestCategory!=Benchmark` 0 fail, same 12 skips.
+  - Return: the method signature, the state struct, test counts.
+- **6.2 (worker-standard): the five settings, XML and reset.**
+  - Files: `DS4Control/ProfilePropGroups.cs` (`GyroMouseStickInfo` fields, defaults, `Reset()`),
+    `DS4Control/DTOXml/ProfileDTO.cs` (elements, `ShouldSerialize`, `MapFrom`/`MapTo`), tests.
+  - Acceptance: round-trip of every element; default/bad/out-of-range → default; a profile without the
+    elements loads to the defaults; **the user's three Edge profiles (copies in a test fixture, never the real
+    files) save byte-identical to the previous build**; loading another profile resets the new fields.
+    Nothing reads the settings yet. Full suite 0 fail, same skips.
+  - Return: element names as written, files, test counts.
+- **6.3 (worker-standard): soft deadzone, game curve, activation ramp.**
+  - Files: `DS4Control/GyroMouseStickMath.cs`, `DS4Control/Mouse.cs` (ramp start: the report where gyro
+    output switches on, reset when it switches off), tests.
+  - Acceptance: 6.1's oracle tests still pass with defaults. Per feature: continuity at the soft threshold
+    (no jump), monotonic output, direction preserved (radial); game curve `k = 2` gives `ratio^0.5` on the
+    length; ramp gain 0 on the first report, 1 at `Ramp` ms, restarts on re-activation. Zero allocation.
+    Mutation check (report it): making each feature unconditional must fail the oracle tests.
+  - Return: what changed, test counts, mutation results.
+- **6.4 (worker-complex): `HighRes` and `Dither`.**
+  - Files: `DS4Control/GyroMouseStickMath.cs`, `DS4Control/Mouse.cs`, `DS4Control/Mapping.cs`
+    (`PostMapStickData`: a high-resolution submit; `currentGyroX/Y` must keep the precise value for
+    `TryApplyCurrentGyro`), tests (model on `PostMapStickConcurrentPublicationTests`, `DS4MappedStickAxisTests`).
+  - `HighRes`: doubles throughout, `TryFromProfileCoordinate`. `Dither`: per-axis error accumulator in the
+    state struct, reset when gyro switches off. Public byte mirrors (`gyroStickX/Y`) keep the rounded value.
+  - Acceptance: `Legacy` unchanged (oracle); `HighRes` within 1/256 of the exact value and reaches Xbox output
+    as 16-bit; `Dither` average over 1,000 reports within 0.01 of the exact value, never more than one byte from
+    it, no drift when gyro stops; epoch/reset rules from the concurrent publication tests still hold.
+  - Return: design summary, files, test counts.
+- **6.5 (orchestrator):** full suite, then pause for a quick check by the user before the shared merge
+  changes (6.6), using the 6.9 steps 1–3 with `Precision Dither`, soft deadzone and game curve.
+- **6.6 (worker-complex): `Add` blend.**
+  - Files: `DS4Control/Mapping.cs` (`PostMapStickData`, `ApplyTo`, `TryApplyCurrentGyro`, `TempMouseJoystick`),
+    `DS4Control/GyroMouseStickMath.cs`, `DS4Control/Mouse.cs`, tests.
+  - As above (anti-deadzone removed from the stick, added, applied once). Per axis, matching today's
+    anti-deadzone shape. Clamp to the stick's range. Touchpad submissions stay `Stronger`.
+  - Acceptance: `Stronger` byte-identical (existing post-map and mapping tests unchanged); `Add` with no stick
+    = today's gyro output; with no gyro = today's stick output; stick 50% right + small gyro left → less than
+    50% right (the correction survives); opposite full deflections clamp; zero allocation; no new locks beyond
+    the existing gate. Full suite 0 fail.
+  - Return: design summary, test counts.
+- **6.7 (worker-complex): gyro in the aim layer. Needs a decision from the user first (below).**
+  - Recommended design: an optional `<UseSourceGyro>True</UseSourceGyro>` in an `<AimLayer>` block. While that
+    layer is active, gyro-to-stick runs with the **source profile's** `GyroMouseStick*` settings; the source's
+    triggers are ignored (the layer decides). This matches how the layer already borrows RS settings. With the
+    base profile on `GyroOutputMode Controls`, gyro is then on only while the L2 layer is active, using the same
+    hold delay and lightbar. The base profile's own gyro trigger keeps working when no layer with gyro is active.
+  - Files: `ProfileDTO.cs` (`AimLayerSettingsDTO`), `AimLayerStickSettings.cs` (borrow the source's
+    `GyroMouseStickInfo` into the immutable layer), `Mouse.cs` (read the active layer — already a `Volatile`
+    reference — and use its settings), docs, tests.
+  - Acceptance: blocks without `<UseSourceGyro>` behave exactly as Phase 5 (existing aim-layer tests unchanged,
+    profiles save byte-identical); layer switch mid-hold swaps gyro settings on the next report and resets
+    smoothing, ramp and dither state; zero allocation. Full suite 0 fail.
+- **6.8 (worker-standard): guide.** New `docs/gyro-aim.md`: the five settings and `<UseSourceGyro>`, °/s
+  conversions, how to find the game's curve exponent (compare slow vs fast turns), the RS anti-deadzone
+  assumption for `Add`, and a sample for the user's setup (Edge profiles, DS4 output → `Dither`). Every XML
+  sample in it is loaded by a test.
+- **6.9 (the user, on hardware, DLL-swap method from 1.2).** Back up `Profiles\` first.
+  1. Regression: with the profiles as they are, hipfire/ADS curves and lightbar behave exactly as after 5.5.
+  2. In DS4Windows, set Edge Linear's gyro output to Mouse-Joystick with trigger L2. ADS and make small corrections:
+     note the baseline feel.
+  3. By hand, add `Precision Dither`, then `SoftDeadZone 30` with `DeadZone 0`, then `GameCurve` (try 1.5–2),
+     one at a time, and note each.
+  4. Try `ActivationRamp` 0 vs 60: does the aim jolt when L2 is pressed?
+  5. Try `Blend Add`: track with the stick and correct with the gyro at the same time.
+  6. If 6.7 was built: move gyro into the L2 layer with `UseSourceGyro`, set Edge Linear back to `Controls`.
+
+**Decision needed before 6.7:** gyro in the aim layer by borrowing the source profile's gyro settings
+(recommended, above), or a smaller option: a per-layer `<GyroScale>` multiplier only, with gyro still switched
+on by the base profile's own trigger. Ask the user when 6.6 is done.
+
 ## 5. Decisions
 Made 2026-10-05:
 - Quieter per-press logging (formerly task A3): **dropped**. Keep the "using Profile" log line; it costs about one line per press and is useful evidence if switching misbehaves.
@@ -710,3 +858,8 @@ result under 5.5. Kickoff message:
 
 > Phase 5 of `PLAN-fast-aim-switching.md`: I ran the 5.5 hardware test. Here are the results: <results>.
 > Record them and fix anything that failed, as orchestrator.
+
+After 5.5 passes, Phase 6 kickoff message:
+
+> Implement Phase 6 of `PLAN-fast-aim-switching.md` (Tasks 6.1–6.5), as orchestrator. Stop at 6.5 for my
+> quick check before the merge changes in 6.6.
