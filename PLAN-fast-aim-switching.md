@@ -475,6 +475,26 @@ Tasks:
     (7132 + 49 `AimLayer*` tests). The 1.1 baseline filter now also matches `AimLayerProfileTests`
     (`~ProfileTests` is a substring match); add `&FullyQualifiedName!~AimLayer` to get the 91.
   - Re-run the 2.1 benchmark and record the before and after numbers in the commit message or PR text.
+  - **Done 2026-10-05 at `3511ab4`.**
+    - Build: 0 warnings, 0 errors (incremental).
+    - Full suite `TestCategory!=Benchmark`: **7181 pass, 12 expected skips (same 12 as 1.1), 0 fail**, 1 m 31 s.
+    - 1.1 baseline classes with `&FullyQualifiedName!~AimLayer`: **89 pass, 0 fail** (same as 1.1; the "91"
+      above also counted the 2 `ProfileSerializerCacheTests`).
+    - Benchmark, same session, same machine. "Before" = `f948210` (2.1 commit, pre-2.2) built in a temporary
+      worktree; "after" = `3511ab4`:
+
+      | Stage | Before wall / CPU ms | After wall / CPU ms |
+      |---|---|---|
+      | a. read + `ProfileMigration` | 0.111 / 0.0 | 0.111 / 0.4 |
+      | c. `Deserialize`, reused serializer | 0.423 / 0.4 | 0.541 / 0.4 |
+      | d. `MapTo(CreateProfileValidationStore())` | 0.291 / 0.4 | 0.258 / 0.0 |
+      | **e. full `TryPrepare` (warm)** | **101.1 / 100.0** | **0.885 / 1.2** |
+      | Assemblies over 45 `TryPrepare` calls | 186 → 231 (+1/call) | 182 → 182 (+0) |
+
+      (CPU values under ~0.4 ms are timer resolution.) Stage b/bc (a new serializer per call, ~46–47 / ~101 ms)
+      still measures the constructor directly and is unchanged, as expected; production no longer calls it per switch.
+    - Release DLL for 4.2: `DS4Windows\bin\x64\Release\net8.0-windows10.0.19041.0\DS4Windows.dll`, 5.0.12.0,
+      11,013,120 bytes, SHA-256 `b0db97fe…3bebe811`.
 - **4.2 (the user, on hardware, using the steps from 1.2):**
   1. **Phase 2 alone.** Keep the existing "Switch 2 Edge Expo" action. The DLL already contains
      Phase 3, but the layer stays off until a profile has an `<AimLayer>` block, so this step
