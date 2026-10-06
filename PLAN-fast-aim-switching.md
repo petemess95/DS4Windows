@@ -678,8 +678,7 @@ place as now, before `cState` is replaced):
 - **5.4 (orchestrator):** full suite `TestCategory!=Benchmark` (record counts), Release build, record DLL
   path/size/SHA-256 for 5.5. Push `fast-aim-switching` to `fork`.
   - **Done 2026-10-06.** Full suite `TestCategory!=Benchmark`: **7231 pass, 12 expected skips, 0 fail** (1 m 38 s).
-    Release build 0 errors, no new warnings. DLL `DS4Windowsind\Release
-et8.0-windows10.0.19041.0\DS4Windows.dll`,
+    Release build 0 errors, no new warnings. DLL `DS4Windows\bin\x64\Release\net8.0-windows10.0.19041.0\DS4Windows.dll`,
     11,017,728 bytes, SHA-256 `e0d61d4be263fde54495bf18165cc4031c2d7d9fdb2f54c681c307747511087f`.
 - **5.5 (the user, on hardware, DLL-swap method from 1.2):**
   1. In DS4Windows, give **Edge Hipfire** its own lightbar colour and save it. Close DS4Windows. Back up
@@ -822,8 +821,7 @@ invert → output (Legacy byte / high-resolution / dithered byte).
 - **6.5 (orchestrator):** full suite, then pause for a quick check by the user before the shared merge
   changes (6.6), using the 6.9 steps 1–3 with `Precision Dither`, soft deadzone and game curve.
   - **Suite done 2026-10-06 at `92079cc`:** `TestCategory!=Benchmark` **7296 pass, 12 expected skips, 0 fail**
-    (1 m 35 s). DLL `DS4Windowsind\Release
-et8.0-windows10.0.19041.0\DS4Windows.dll`, 11,023,872 bytes,
+    (1 m 35 s). DLL `DS4Windows\bin\x64\Release\net8.0-windows10.0.19041.0\DS4Windows.dll`, 11,023,872 bytes,
     SHA-256 `f7f001f7783491e48a523e83eaa3e0101af5d7740aa943179b1baf3a0730b15e`.
   - **Quick check by the user (pending):** DLL-swap method from 1.2, elevated copy. Back up `Profiles\` first.
     1. Regression: profiles as they are; hipfire/ADS curves and lightbar behave exactly as after 5.5.
