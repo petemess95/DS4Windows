@@ -30,6 +30,7 @@ namespace DS4Windows
             SmoothX = default;
             SmoothY = default;
             SmoothTail = 0;
+            RampElapsedMs = 0.0;
         }
 
         // Borrowed from Mouse's filter pair: the profile's MinCutoff/Beta
@@ -40,6 +41,9 @@ namespace DS4Windows
         internal GyroMouseStickSmoothBuffer SmoothY;
         // Always 1..3 after the first write, as in the original ring.
         internal int SmoothTail;
+        // Summed report time (ms) since gyro output switched on, for the
+        // activation ramp. Cleared by Reset while output is off.
+        internal double RampElapsedMs;
     }
 
     internal readonly struct GyroMouseStickOutput
@@ -113,6 +117,20 @@ namespace DS4Windows
             else
             {
                 deltaY = 0;
+            }
+
+            if (msinfo.softDeadZone > 0)
+            {
+                // Radial tightening: below the threshold the length becomes
+                // length^2 / threshold, so it meets the raw value at the edge.
+                double length = Math.Sqrt((double)deltaX * deltaX +
+                    (double)deltaY * deltaY);
+                if (length > 0.0 && length < msinfo.softDeadZone)
+                {
+                    double softScale = length / msinfo.softDeadZone;
+                    deltaX = (int)(deltaX * softScale);
+                    deltaY = (int)(deltaY * softScale);
+                }
             }
 
             if (modifier.DeadzoneActive)
@@ -199,6 +217,33 @@ namespace DS4Windows
             if (deltaX != 0) xratio = deltaX / (double)maxValX;
             if (deltaY != 0) yratio = deltaY / (double)maxValY;
 
+            if (msinfo.activationRamp > 0)
+            {
+                // Gain eases 0 -> 1 over the ramp, timed by report elapsed
+                // so it is deterministic. 0 on the first report after on.
+                if (state.RampElapsedMs < msinfo.activationRamp)
+                {
+                    double rampGain = state.RampElapsedMs / msinfo.activationRamp;
+                    xratio *= rampGain;
+                    yratio *= rampGain;
+                    state.RampElapsedMs += elapsed * 1000.0;
+                }
+            }
+
+            if (msinfo.gameCurve != 1.0)
+            {
+                // Undo the game's stick curve on the vector length so the
+                // camera speed follows hand speed; direction is kept.
+                double ratioLength = Math.Sqrt(xratio * xratio + yratio * yratio);
+                if (ratioLength > 0.0)
+                {
+                    double curveScale = Math.Pow(ratioLength, 1.0 / msinfo.gameCurve) /
+                        ratioLength;
+                    xratio *= curveScale;
+                    yratio *= curveScale;
+                }
+            }
+
             if (msinfo.maxOutputEnabled)
             {
                 double maxOutRatio = msinfo.maxOutput / 100.0;
@@ -244,7 +289,8 @@ namespace DS4Windows
 
         // Runs on reports while gyro output is off: pushes a zero into the
         // smoothing ring and, for One Euro, into both filters so they decay
-        // instead of resuming from a stale value.
+        // instead of resuming from a stale value. Also restarts the
+        // activation ramp for the next time output switches on.
         internal static void Reset(double elapsed, GyroMouseStickInfo msinfo,
             ref GyroMouseStickFilterState state)
         {
@@ -252,6 +298,7 @@ namespace DS4Windows
             state.SmoothX[iIndex] = 0;
             state.SmoothY[iIndex] = 0;
             state.SmoothTail = iIndex + 1;
+            state.RampElapsedMs = 0.0;
 
             if (msinfo.smoothingMethod == GyroMouseStickInfo.SmoothingMethod.OneEuro)
             {
