@@ -8,6 +8,8 @@ for hip-fire. See [Several layers](#several-layers).
 
 There is no editor UI for it yet. You add it by hand to the profile's XML file.
 
+For recoil compensation and a rotational aim-assist circle on a layer, see [Aim macros](aim-macros.md).
+
 ## What it does
 
 - While the trigger is held past the threshold, the right stick uses the **source profile's**
