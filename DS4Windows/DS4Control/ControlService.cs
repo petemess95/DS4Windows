@@ -81,6 +81,10 @@ namespace DS4Windows
         private DS4State[] CurrentState = new DS4State[MAX_DS4_CONTROLLER_COUNT];
         private DS4State[] PreviousState = new DS4State[MAX_DS4_CONTROLLER_COUNT];
         private DS4State[] TempState = new DS4State[MAX_DS4_CONTROLLER_COUNT];
+        // Aim macros write here, never into a buffer that another reader
+        // (readings preview, mapper, OSC monitor) owns. Used only on reports
+        // where a macro changes the stick.
+        private DS4State[] AimMacroOutputState = new DS4State[MAX_DS4_CONTROLLER_COUNT];
         public DS4StateExposed[] ExposedState = new DS4StateExposed[MAX_DS4_CONTROLLER_COUNT];
         public ControllerSlotManager slotManager = new ControllerSlotManager();
         public bool recordingMacro = false;
@@ -363,6 +367,7 @@ namespace DS4Windows
                 MappedState[i] = new DS4State();
                 CurrentState[i] = new DS4State();
                 TempState[i] = new DS4State();
+                AimMacroOutputState[i] = new DS4State();
                 PreviousState[i] = new DS4State();
                 ExposedState[i] = new DS4StateExposed(CurrentState[i]);
                 oscState[i] = new DS4State();
@@ -6224,8 +6229,12 @@ namespace DS4Windows
 
                 cState = device.Debouncer.ProcessInput(cState);
 
-
-                cState = Mapping.SetCurveAndDeadzone(ind, cState, TempState[ind], device);
+                // Unmapped report and clock for the aim macros below: the
+                // same state and nowMs the aim layer decides from.
+                DS4State aimMacroInput = cState;
+                long reportNowMs = Mapping.ReportNowMs();
+                cState = Mapping.SetCurveAndDeadzone(ind, cState, TempState[ind], device,
+                    reportNowMs);
 
                 bool oscMonitoringPending = false;
 
@@ -6267,6 +6276,11 @@ namespace DS4Windows
                     Mapping.DiscardPostMapStickData(ind);
                     Mapping.ResetFlickStickCalibration(ind);
                 }
+
+                // Aim macros: after either path, so they see the final stick
+                // (gyro/touch merges included), and before the output send.
+                cState = ApplyAimMacros(ind, aimMacroInput, cState,
+                    AimMacroOutputState[ind], reportNowMs, activeOutDevType[ind]);
 
                 if (!useDInputOnly[ind])
                 {
@@ -6363,6 +6377,32 @@ namespace DS4Windows
 
                 PublishReportDiagnostics(diagnosticsSource, ref deferredDiagnostics, cState);
             }
+        }
+
+        /// <summary>
+        /// Aim macros (Phase 7), once per report. input = the unmapped report
+        /// (toggle buttons, raw R2); mapped = the state about to be sent.
+        /// Returns mapped itself unless a macro changes the right stick; then
+        /// returns scratch, a copy of mapped with the new stick. Never writes
+        /// into input or mapped: on the plain path mapped is TempState (the
+        /// readings preview's buffer), on the custom path the mapper's own.
+        /// Without macros: one volatile read and a branch. Lock- and
+        /// allocation-free (an arm/disarm edge queues one log line).
+        /// </summary>
+        internal static DS4State ApplyAimMacros(int ind, DS4State input, DS4State mapped,
+            DS4State scratch, long nowMs, OutContType output)
+        {
+            AimMacroSettings macros = AimLayerState.Current(ind)?.Macros;
+            if (macros == null)
+                return mapped;
+            if (!AimMacroRuntime.Step(ind, macros, input, AimLayerState.Active(ind),
+                    mapped.RXAxis, mapped.RYAxis, nowMs, output,
+                    out DS4MappedStickAxis newX, out DS4MappedStickAxis newY))
+                return mapped;
+            mapped.CopyTo(scratch);
+            scratch.RXAxis = newX;
+            scratch.RYAxis = newY;
+            return scratch;
         }
 
         internal static void CaptureReportBatteryDiagnostic(DS4Device device,

@@ -2090,8 +2090,12 @@ namespace DS4Windows
 
         internal static DS4State SetCurveAndDeadzone(int device, DS4State cState, DS4State dState,
             object sourceOwner)
-            => SetCurveAndDeadzone(device, cState, dState, sourceOwner,
-                (long)(Stopwatch.GetTimestamp() * stickFilterMillisecondsPerTick));
+            => SetCurveAndDeadzone(device, cState, dState, sourceOwner, ReportNowMs());
+
+        // The report clock (Stopwatch, milliseconds) behind nowMs below. The
+        // report loop reads it once and shares it with the aim macros.
+        internal static long ReportNowMs() =>
+            (long)(Stopwatch.GetTimestamp() * stickFilterMillisecondsPerTick);
 
         // nowMs: this report's Stopwatch time in milliseconds, read once and
         // shared by the aim-layer hold timers and the stick filters. Tests

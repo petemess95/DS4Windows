@@ -384,7 +384,8 @@ namespace DS4Windows
                 return getTransitionedColor(ref lowColor, ref fullColor, battery);
             }
 
-            // Aim layer cue: only the plain main colour is swapped; custom,
+            // Aim layer cue, or the armed aim macros' ArmedColor while no
+            // layer is active: only the plain main colour is swapped; custom,
             // rainbow, battery gradient and every overlay applied after this
             // (low battery flash, idle fade, charging, forced/macro colour,
             // distance, OpenRGB) still win.

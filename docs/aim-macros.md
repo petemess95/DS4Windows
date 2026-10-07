@@ -56,8 +56,15 @@ full down), so a positive `PullY` pulls the aim down. `DriftX` is positive to th
 - Press the full `Toggle` combo to arm; press it again to disarm. It flips once per press (when the
   last button of the combo goes down), so holding it does not flicker.
 - The macros are **disarmed** when DS4Windows starts, on every profile load (including switching to
-  a temporary profile and reloading the same profile), and when the controller disconnects.
-- The Log tab shows `Aim macros armed` or `Aim macros disarmed` with the profile name.
+  a temporary profile and reloading the same profile), and when the controller disconnects. A combo
+  that is already held when the profile loads or the controller reconnects does not count: release
+  it and press it again.
+- Arming needs at least one working aim layer in the profile. If no `<AimLayer>` block loads (for
+  example its source profile is missing), the macros cannot arm and the armed colour never shows.
+- The Log tab shows `Aim macros armed` or `Aim macros disarmed` with the profile name and the
+  controller number, for example `Aim macros armed (profile "Edge Linear", controller 1)`. When a
+  profile load or a disconnect disarms them, the line ends with `: profile loaded` or
+  `: controller removed`.
 - The toggle buttons are **not** removed from what the game sees. `FnL+FnR` (the DualSense Edge's
   Fn buttons) is recommended because the virtual controller has no Fn buttons, so the game never
   sees them. Any other combo **also reaches the game**.
@@ -65,8 +72,10 @@ full down), so a positive `PullY` pulls the aim down. `DriftX` is positive to th
 ### Lightbar
 
 With `ArmedColor` set, the lightbar shows that colour while the macros are armed **and no aim layer
-is active**. While a layer is active, its own lightbar cue is shown as usual. Like the aim-layer
-cue, the armed colour is hidden while the app-level "Use Custom Color" is on.
+is active**. While a layer is active, its own lightbar cue is shown as usual (or the base colour, if
+that layer's `UseSourceLightbar` is off). Like the aim-layer cue, the armed colour only replaces the
+plain main colour: it is hidden while the app-level "Use Custom Color" is on, and the battery
+gradient, rainbow and low-battery flash are not changed.
 
 ## The XML
 

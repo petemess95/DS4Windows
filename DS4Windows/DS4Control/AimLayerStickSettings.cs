@@ -452,15 +452,22 @@ namespace DS4Windows
         }
 
         // Lightbar: the colour to show where the plain main colour would be.
-        // Only swaps when a set is published and its active layer wants its
-        // source colour; otherwise returns baseColor. A null set wins over a
-        // stale active layer.
+        // Only swaps when a set is published: an active layer shows its
+        // source colour (when it wants it, else baseColor); with no active
+        // layer, armed aim macros show their ArmedColor (when set).
+        // Otherwise returns baseColor. A null set wins over a stale active
+        // layer.
         internal static DS4Color MainLightbarColor(int device, DS4Color baseColor)
         {
-            if (Current(device) == null)
+            AimLayerSet layers = Current(device);
+            if (layers == null)
                 return baseColor;
             AimLayerStickSettings layer = Active(device);
-            return layer != null && layer.UseSourceLightbar ? layer.LightbarColor : baseColor;
+            if (layer != null)
+                return layer.UseSourceLightbar ? layer.LightbarColor : baseColor;
+            AimMacroSettings macros = layers.Macros;
+            return macros != null && macros.HasArmedColor && AimMacroRuntime.IsArmed(device) ?
+                macros.ArmedColor : baseColor;
         }
 
         internal static long ReadSaveSequence() => Interlocked.Read(ref saveSequence);
@@ -601,6 +608,9 @@ namespace DS4Windows
             lock (entries[device])
             {
                 Entry entry = entries[device];
+                // Every profile load (temp profiles and the same profile
+                // again included) starts disarmed.
+                AimMacroRuntime.Disarm(device, entry.Macros, "profile loaded");
                 entry.Requests = preparation?.CopyRequests();
                 entry.Built = preparation?.CopyBuilt();
                 // New reference even for a re-applied preparation, so the
@@ -627,6 +637,7 @@ namespace DS4Windows
             lock (entries[device])
             {
                 Entry entry = entries[device];
+                AimMacroRuntime.Disarm(device, entry.Macros, "profile loaded");
                 entry.Requests = null;
                 entry.Built = null;
                 entry.Set = null;
@@ -645,6 +656,7 @@ namespace DS4Windows
         {
             lock (entries[device])
             {
+                AimMacroRuntime.Disarm(device, entries[device].Macros, "controller removed");
                 entries[device].Suspended = true;
                 Volatile.Write(ref active[device], null);
                 Volatile.Write(ref published[device], null);
@@ -726,6 +738,141 @@ namespace DS4Windows
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Aim macros at run time (Phase 7): the per-slot armed flag, the
+    /// toggle's rising-edge detection and the per-slot <see cref="AimMacroState"/>.
+    /// The input thread calls <see cref="Step"/> once per report; profile
+    /// load/clear and controller removal call <see cref="Disarm"/>.
+    /// </summary>
+    internal static class AimMacroRuntime
+    {
+        // Per slot: (reset generation << 1) | armed. Disarm (cold paths) moves
+        // to a new generation with armed clear; the input thread flips armed
+        // with a compare-exchange on the toggle's edge, so a reset racing a
+        // press always wins. Zero (disarmed) at startup.
+        private static readonly int[] armWord = new int[Global.TEST_PROFILE_ITEM_COUNT];
+        // Input thread only (per slot, like AimLayerState's hold timers): the
+        // generation last seen, whether the full toggle was down last report,
+        // and the macro maths state.
+        private static readonly int[] seenGeneration = new int[Global.TEST_PROFILE_ITEM_COUNT];
+        private static readonly bool[] toggleWasDown = new bool[Global.TEST_PROFILE_ITEM_COUNT];
+        private static readonly AimMacroState[] states =
+            new AimMacroState[Global.TEST_PROFILE_ITEM_COUNT];
+
+        internal const string ArmedMessage = "Aim macros armed";
+        internal const string DisarmedMessage = "Aim macros disarmed";
+
+        /// <summary>Lock- and allocation-free; any thread.</summary>
+        internal static bool IsArmed(int device) => (Volatile.Read(ref armWord[device]) & 1) != 0;
+
+        /// <summary>
+        /// Cold path: a profile load or clear, or the controller was removed.
+        /// Disarms and starts a new generation, so the next report also drops
+        /// the macro timers and needs a fresh press of the toggle. Logs one
+        /// line when it was armed (previous = the macros it was armed with).
+        /// </summary>
+        internal static void Disarm(int device, AimMacroSettings previous, string reason)
+        {
+            int old = Volatile.Read(ref armWord[device]);
+            while (true)
+            {
+                int next = unchecked((old & ~1) + 2);
+                int seen = Interlocked.CompareExchange(ref armWord[device], next, old);
+                if (seen == old)
+                    break;
+                old = seen;
+            }
+            if ((old & 1) != 0)
+                QueueLog(device, false, previous?.ProfileName, reason);
+        }
+
+        /// <summary>
+        /// Input thread, once per report while the published set has macros.
+        /// input = the unmapped report (the state AimLayerState.Select reads
+        /// L2/R2 from); layer = the active layer this report (null = none);
+        /// rx/ry = the final mapped right stick. Returns true with the new
+        /// axes when a macro contributes; false = leave the stick alone.
+        /// Lock- and allocation-free except on an arm/disarm edge (log line).
+        /// </summary>
+        internal static bool Step(int device, AimMacroSettings macros, DS4State input,
+            AimLayerStickSettings layer, in DS4MappedStickAxis rx, in DS4MappedStickAxis ry,
+            long nowMs, OutContType output, out DS4MappedStickAxis newX, out DS4MappedStickAxis newY)
+        {
+            ref AimMacroState state = ref states[device];
+            int word = Volatile.Read(ref armWord[device]);
+            bool down = macros.IsToggleDown(input);
+            if ((word & ~1) != seenGeneration[device])
+            {
+                // Loaded or reconnected since the last report here: start
+                // clean, and a combo already held does not count as a press.
+                seenGeneration[device] = word & ~1;
+                toggleWasDown[device] = down;
+                state.Reset();
+            }
+            else if (down && !toggleWasDown[device])
+            {
+                // Rising edge of the full combo: flip once per press.
+                toggleWasDown[device] = true;
+                int flipped = word ^ 1;
+                if (Interlocked.CompareExchange(ref armWord[device], flipped, word) == word)
+                {
+                    word = flipped;
+                    QueueLog(device, (word & 1) != 0, macros.ProfileName, null);
+                }
+            }
+            else
+            {
+                toggleWasDown[device] = down;
+            }
+
+            if ((word & 1) == 0)
+            {
+                // Disarmed: nothing to add; just drop a running timer.
+                if (state.Layer != null)
+                    state.Reset();
+                newX = rx;
+                newY = ry;
+                return false;
+            }
+            return AimMacroMath.Apply(ref state, true, macros, layer, rx, ry, input.R2, nowMs,
+                PrecisionFor(output), out newX, out newY);
+        }
+
+        // Byte = the output carries the stick as a byte (DS4, DualSense and
+        // the other byte-stick Viiper outputs); HighRes = Xbox 360/One and
+        // Switch 2 Pro, which take the exact coordinate.
+        internal static AimMacroOutputPrecision PrecisionFor(OutContType output) =>
+            output.Normalize() switch
+            {
+                OutContType.ViiperX360 or OutContType.ViiperXboxOne or
+                    OutContType.ViiperSwitch2Pro => AimMacroOutputPrecision.HighRes,
+                _ => AimMacroOutputPrecision.Byte,
+            };
+
+        // Logged off the input thread: the GUI log handlers take locks.
+        private static void QueueLog(int device, bool armed, string profileName, string reason)
+        {
+            string message = $"{(armed ? ArmedMessage : DisarmedMessage)} " +
+                $"(profile \"{profileName}\", controller {device + 1})" +
+                (reason != null ? $": {reason}" : string.Empty);
+            ThreadPool.UnsafeQueueUserWorkItem(static text => AppLogger.LogToGui(text, false),
+                message, preferLocal: false);
+        }
+
+        // Test seam: back to the startup state. Not safe while a report runs
+        // for the same slot.
+        internal static void ResetForTests(int device)
+        {
+            Volatile.Write(ref armWord[device], 0);
+            seenGeneration[device] = 0;
+            toggleWasDown[device] = false;
+            states[device].Reset();
+        }
+
+        // Test seam: a copy of the slot's macro state (input thread owned).
+        internal static AimMacroState StateForTests(int device) => states[device];
     }
 
     /// <summary>
