@@ -5,8 +5,9 @@ Written 2026-10-05.
 **Status (2026-10-06):** Phases 1–4 are done (results under Tasks 1.1, 2.1, 2.2, 3.1–3.5, 4.1 and
 4.2; Task 2.3 was dropped, see its note). Phase 2 and the aim layer both passed on the user's DualSense
 Edge. The upstream pull request branch is prepared (section 5). **Phase 5 (hipfire layer) is done**, including the
-5.5 hardware test. **Phase 6 (better gyro aiming while aiming down sights): Tasks 6.1–6.4 done; the 6.5 quick check
-failed and the user put Phase 6 on hold (2026-10-06); see the 6.5 note.**
+5.5 hardware test. **Phase 6 (gyro) is closed** (2026-10-06): 6.1–6.4 stay in the branch, off by default; the
+rest was dropped after the 6.5 check failed and the user decided against gyro. **Phase 7 (aim macros: recoil
+compensation and a rotational aim-assist circle, behind a master toggle) is planned and next.**
 
 ---
 
@@ -125,7 +126,8 @@ Deliverables, in order:
 | 3. Aim layer | Swap right-stick settings while L2 is held, with no profile switch | 3.1–3.5 | Done 2026-10-05 (`749f3d8`…`c2db58a`; guide in `docs/aim-layer.md`) |
 | 4. Testing | Full test run, then you test on the controller | 4.1, 4.2 | Done 2026-10-06 (all pass; no fixes needed) |
 | 5. Hipfire layer | Several aim layers per profile, first match wins, with an optional hold delay (R2 → Edge Hipfire after 100 ms, L2 still wins) | 5.1–5.5 | Done 2026-10-06 (`9da1d4b`, `0ece443`, `e321d2f`; 5.5 passed on hardware) |
-| 6. Gyro aiming | Better gyro-to-stick for small corrections while aiming; every change off by default and byte-identical when off | 6.1–6.9 | **On hold** 2026-10-06: 6.1–6.4 done (`61d190c`…`92079cc`); 6.5 check failed (see its note) |
+| 6. Gyro aiming | Better gyro-to-stick for small corrections while aiming; every change off by default and byte-identical when off | 6.1–6.9 | **Closed** 2026-10-06: 6.1–6.4 kept (`61d190c`…`92079cc`, off by default); 6.5 check failed; 6.5 redesign and 6.6–6.9 dropped |
+| 7. Aim macros | Recoil compensation and a rotational aim-assist circle inside aim layers, armed by a master toggle; off unless configured *and* armed | 7.1–7.6 | Planned 2026-10-06 |
 
 Do the phases in order. Tasks are numbered `<phase>.<step>`.
 
@@ -887,6 +889,184 @@ invert → output (Legacy byte / high-resolution / dithered byte).
 (recommended, above), or a smaller option: a per-layer `<GyroScale>` multiplier only, with gyro still switched
 on by the base profile's own trigger. Ask the user when 6.6 is done.
 
+**Phase 6 closed (user, 2026-10-06).** The user is done with gyro. 6.1–6.4 stay in the branch: every setting
+defaults to today's behaviour, and the oracle and fixture tests prove the output is byte-identical when the
+settings are off. The 6.5 redesign, 6.6 (Add blend), 6.7, 6.8 and 6.9 are dropped. Phase 7 does not need 6.6:
+it adds to the right stick on its own path (see 7.2). The installed DLL (`92079cc` build) behaves like Phase 5
+with the user's profiles.
+
+### Phase 7: Aim macros (recoil compensation and rotational aim-assist circle)
+
+**Goal (user, 2026-10-06).** For Fortnite, in private or custom matches only (the user's stated use):
+(a) **recoil compensation**, a pull on the right stick while aiming and firing; (b) a **rotational circle**, tiny
+right-stick circles while aiming so the game's rotational aim assist keeps re-engaging. Both are switched on and
+off by a **master toggle** (a button combo). The toggle is always off when DS4Windows starts and whenever a
+profile loads.
+
+**Scope limits (fixed; do not add).** No randomisation, "humanising" or other change meant to avoid
+anti-cheat detection. No left-stick strafe jitter and no L2 re-tap (the user chose the right-stick circle only).
+Nothing runs unless a profile has the elements below **and** the toggle is armed.
+
+**Hard rule (same as Phase 6).** A profile without the new elements, or with them but disarmed, must give
+**byte-identical output** to today, and it must save byte-identical (fixtures in `DS4WindowsTests/TestData/Profiles/`).
+
+**Facts to build on (checked 2026-10-06; do not re-investigate).**
+- The user's profiles all have `RSDeadZone 0`, `RSAntiDeadZone 0`, `RSMaxZone 100`, output `ViiperDS4` (sticks
+  are bytes on the wire). The **game's** right-stick deadzone (Fortnite's controller setting) is the only
+  deadzone, so offsets must be set past it, or small pulls disappear inside it (see `GameDeadZone`).
+- Edge Linear has two aim layers: L2 → Edge Expo (ADS), R2 after 180 ms → Edge Hipfire. L2 wins. While aiming
+  and firing, the **L2 layer** is active, so recoil is set inside that block and checks R2 itself.
+- `AimLayerState.Select` (`DS4Control/AimLayerStickSettings.cs:~370`) decides the active layer every report
+  from raw L2/R2 and a millisecond clock (`nowMs`); `AimLayerState.Active(device)` returns it (`Volatile`).
+- Report pipeline (`ControlService.cs:~6225–6265`): `SetCurveAndDeadzone` → `MapCustom` (only when the profile
+  has custom actions, extras, a temp profile or profile actions) **or** the plain path → output send
+  (`if (!useDInputOnly[ind])`). Gyro/touch post-map data is merged inside `MapCustom` (`Mapping.cs:3430`
+  `ApplyPostMapStickData`).
+- `DS4State` keeps high-resolution stick axes (`RXAxis`/`RYAxis`, `DS4MappedStickAxis`); `DualSenseDevice`
+  parses the Edge's `FnL`/`FnR` (`DualSenseDevice.cs:5482`). The virtual DS4 has no Fn buttons, so an
+  `FnL+FnR` combo never reaches the game.
+- Dither to a byte with a carry already exists for gyro (`GyroMouseStickMath`, 6.4); reuse the idea, not the
+  state (macros get their own carry).
+
+**New XML (hand-edited, like the aim layer).** Profile level, once per profile, after the last `<AimLayer>`:
+
+```xml
+<AimMacros>
+  <Toggle>FnL+FnR</Toggle>          <!-- combo that arms/disarms; required, else macros never arm -->
+  <GameDeadZone>10</GameDeadZone>   <!-- percent; set to Fortnite's right-stick deadzone -->
+  <GameDeadZoneShape>Radial</GameDeadZoneShape>  <!-- Radial | Axial -->
+  <ArmedColor>255,0,255</ArmedColor> <!-- lightbar in place of the base colour while armed; optional -->
+</AimMacros>
+```
+
+Inside an `<AimLayer>` block (both optional, at most one of each per layer):
+
+```xml
+<Recoil>
+  <FireThreshold>30</FireThreshold> <!-- R2 raw above this = firing; 0-255 -->
+  <Delay>0</Delay>                   <!-- ms after firing starts, 0-2000 -->
+  <Ramp>60</Ramp>                    <!-- ms to ease in, 0-1000 -->
+  <PullY>6</PullY>                   <!-- percent of the game's live range, down; 0-50 -->
+  <DriftX>0</DriftX>                 <!-- percent, + = right; -50-50 -->
+  <Pattern>0:8,300:5,1200:4</Pattern> <!-- optional ms:PullY points, linear between, last value held; overrides PullY; max 16 -->
+</Recoil>
+<Rotate>
+  <Radius>10</Radius>                <!-- percent of the game's live range; 0-50 -->
+  <RadiusY>10</RadiusY>              <!-- optional, ellipse; default = Radius -->
+  <Period>60</Period>                <!-- ms per full circle, 10-1000 -->
+  <Direction>CW</Direction>          <!-- CW | CCW -->
+  <WhenFiring>Any</WhenFiring>       <!-- Any | FiringOnly | NotFiring (firing = Recoil's FireThreshold, else R2 > 30) -->
+  <FadeAbove>0</FadeAbove>           <!-- percent of your own stick; above it the circle shrinks to 0 at full stick; 0 = never fade -->
+</Rotate>
+```
+
+Rules for all elements: bad or out-of-range values → that element is ignored and one warning is logged (same
+per-slot "log once" pattern as aim-layer warnings); never fail the load. Each element is written on save only
+when present, so unchanged profiles save byte-identical. Macros belong to the **layer block** (not borrowed from
+the source profile).
+
+**Maths (all per report, in "game space").**
+- Output deflection `v` per axis in −1…1 comes from the final mapped RS (`ProfileCoordinate`, not the byte).
+  The game sees `g = max(0, |v| − d) / (1 − d)`, `d = GameDeadZone/100`: radial on the vector length for
+  `Radial`, per axis for `Axial`.
+- Macro offset `o` (game space) = recoil `(DriftX, PullY)` scaled by the ramp (and Pattern), plus the circle
+  point `(Radius·cos φ, RadiusY·sin φ)` scaled by the fade. `G = g_user + o`, clamp `|G| ≤ 1`, map back:
+  `v' = d + |G|(1 − d)` along `G`'s direction (radial) or per axis. `G = 0` → exact centre.
+- **When no macro contributes this report** (disarmed, no layer, not firing, offset exactly 0), the stick is
+  left untouched: no conversion round trip, byte-identical.
+- Output: high-resolution axis for Xbox/Switch outputs; for `ViiperDS4`, dither to a byte with a per-axis carry
+  (reset when macros stop contributing), so fractional pulls average out.
+- Recoil timer: starts on the report where R2 rises above `FireThreshold` while the layer is active; resets when
+  R2 drops or the active layer changes. Circle phase φ advances by `2π·elapsed/Period` (`−` for CCW), starts at
+  0 when the circle starts, and resets when it stops or the layer changes. Use the same `nowMs` clock as
+  `AimLayerState.Select`.
+- "Down" is +Y in DS4 stick space (byte 255 = down); confirm against `DS4State` before writing tests, and state
+  it in the guide.
+
+**Arming.**
+- Per-device armed flag (`Volatile`). It flips on the **rising edge** of the full `Toggle` combo from raw input
+  (all buttons down this report, not all down last report), so holding it doesn't flicker. False at startup, on
+  every profile load (including temp profiles and reloading the same profile), on controller disconnect, and when
+  the profile has no `<AimMacros>` or no `Toggle`.
+- `Toggle` grammar: button names joined by `+`, 1–4 buttons, case-insensitive, from the `DS4State` bool buttons
+  (`FnL`, `FnR`, `BLP`, `BRP`, `PS`, `Share`, `Options`, `Touch`…). Unknown name → toggle missing (warning).
+- The toggle buttons are **not** removed from the output; `FnL+FnR` is recommended because the virtual DS4 can't
+  output them. The guide warns that other combos also reach the game.
+- Log one line on each arm/disarm ("Aim macros armed" / "disarmed", with the profile name).
+- Lightbar: while armed and no aim layer is active, `ArmedColor` replaces the base colour (same hook as
+  `AimLayerState.MainLightbarColor`). Layer colours are unchanged. Like the aim-layer cue, it's hidden while the
+  app-level "Use Custom Color" is on (Task 4.2 finding).
+
+**Other things considered.**
+- **Where to hook.** One call after the `MapCustom`/plain branch and before the output send, so it sees the final
+  stick, gyro/touch merges included, on both paths. **Risk:** on the plain path `cState` may be the device's own
+  current state (or `TempState`); macros must write only into a mapping-owned copy, never the device's
+  raw/previous state, or the next report's comparisons break. 7.3 must check this and test it.
+- **Joined devices** (`TempMouseJoystick` path): out of scope; macros don't run there.
+- **Hot path.** No allocation or locks in the macro step; settings are immutable objects built at load, read
+  through the existing `Volatile` layer reference.
+- **Fortnite facts for the guide (not code):** most Fortnite gun inaccuracy is random bloom, which no pull can
+  cancel; recoil compensation only helps the steady vertical kick. Aim assist must be on in the game's settings.
+  Test in Creative or a private match.
+
+**Tasks (worker tiers per section 3: mainly worker-complex and worker-standard).**
+
+- **7.1 (worker-standard): settings, XML, build.**
+  - Files: `DS4Control/DTOXml/ProfileDTO.cs` (`<AimMacros>` DTO; `<Recoil>`/`<Rotate>` in `AimLayerSettingsDTO`),
+    `DS4Control/AimLayerStickSettings.cs` (immutable `AimMacroRecoil`/`AimMacroRotate` on the built layer; profile
+    `AimMacroSettings` published alongside the layer set), `DS4Control/ScpUtil.cs` (store/reset per slot, if
+    needed), tests.
+  - Acceptance: round-trip of every element; each bad/out-of-range value → element ignored + one warning; the
+    four Edge fixture profiles (`*.xml`, no new elements) save byte-identical; a profile load clears the previous
+    profile's macros; `Toggle` parsing (valid, unknown name, 5 buttons, empty). Nothing reads the settings yet.
+    Full suite `TestCategory!=Benchmark` 0 fail, same 12 skips.
+  - Return: element names and order as written, the built types, test counts.
+- **7.2 (worker-complex): `AimMacroMath` (pure).**
+  - Files: new `DS4Control/AimMacroMath.cs`, new `DS4WindowsTests/AimMacroMathTests.cs`.
+  - A static method taking the final RS axes, raw R2, `elapsed`/`nowMs`, the active layer's macros, the profile
+    macro settings, output precision (byte/high-res) and a per-device state struct (recoil start, ramp, phase,
+    dither carry); returns the new axes or "untouched".
+  - Acceptance: no contribution → returns "untouched" (and the caller's axes are not re-encoded); game-space
+    conversion: a pure user input goes through `g` → `v'` unchanged within 1/32768; `GameDeadZone 0` = plain
+    addition; recoil timeline (delay, ramp 0→1, Pattern interpolation, last value held, reset on release/layer
+    change); circle: over one period the game-space points lie on the radius within 2% and step the right way
+    for CW/CCW; FadeAbove shrinks linearly; clamp at full deflection keeps direction; dither average over 1,000
+    reports within 0.01 of exact, never > 1 byte off, carry cleared on stop; zero allocation over 20,000 warm calls.
+  - Return: signature, state struct, design summary, test counts.
+- **7.3 (worker-complex): arming, wiring, lightbar.**
+  - Files: `DS4Control/ControlService.cs` (hook before output; arm on rising edge from raw input; reset on profile
+    load/disconnect), `DS4Control/AimLayerStickSettings.cs` (armed flag + state per slot, next to `AimLayerState`),
+    `DS4Control/DS4LightBar.cs` (armed colour), tests (model on `ProfileMappingLiveInputTests`,
+    `AimLayerLightbarTests`).
+  - Acceptance: existing tests unchanged; a profile without `<AimMacros>` → mapped output byte-identical through
+    the real pipeline; configured but disarmed → byte-identical; holding the combo flips once; every reset case
+    (startup, load, reload same profile, temp profile, disconnect) leaves it disarmed; layer change mid-fire resets
+    recoil and phase on the next report; macros never write into the device's current/previous state (test the
+    plain path and the `MapCustom` path); armed colour only when armed and no layer is active; arm/disarm log
+    lines; zero allocation in the per-report step. Full suite 0 fail, same 12 skips.
+  - Return: hook location and why, what the plain-path state check found, test counts.
+- **7.4 (worker-standard): guide.** New `docs/aim-macros.md`: what each element does, units, the game-space idea
+  in one paragraph, the scope limits, a warning that these break Fortnite's rules in public matches and the user
+  keeps them for private/custom play, and how to tune:
+  1. Set `GameDeadZone` to Fortnite's right-stick deadzone value (and the same shape if known; try `Axial` if
+     small pulls feel uneven across directions).
+  2. Recoil: Creative, a wall at fixed range, raise `PullY` in steps of 2 until the spray stays level; use
+     `Pattern` only if the first shots kick harder.
+  3. Circle: start `Radius 10`, `Period 60`; too visible a wobble → smaller radius; assist not "sticking" → try
+     a shorter period or larger radius. Try `FadeAbove 40` if fast flicks feel wobbly.
+  - A sample for Edge Linear: `<AimMacros>` with `FnL+FnR`, and `<Recoil>` + `<Rotate>` inside the existing L2
+    block. Every XML sample in the guide is loaded by a test.
+- **7.5 (orchestrator):** full suite, Release build, DLL size + SHA-256, then pause for 7.6.
+- **7.6 (the user, on hardware, DLL-swap method from 1.2; elevated `Start-Process -Verb RunAs` copy).** Back up
+  `Profiles\` first.
+  1. Regression, profiles unchanged: hipfire/ADS curves and lightbar exactly as after 5.5.
+  2. Add the guide's sample to Edge Linear. Not armed: still exactly as step 1.
+  3. Press `FnL+FnR`: lightbar shows the armed colour, log says armed; press again: disarmed. Hold the combo: one
+     flip only. Switch profile and back: disarmed.
+  4. Armed, in Creative: aim (L2) without firing: the circle is visible but small; aim + fire: the pull starts
+     after the ramp. Hipfire (R2 only): no recoil unless the hipfire block has its own `<Recoil>`.
+  5. Tune per the guide; note the values that work.
+
 ## 5. Decisions
 Made 2026-10-05:
 - Quieter per-press logging (formerly task A3): **dropped**. Keep the "using Profile" log line; it costs about one line per press and is useful evidence if switching misbehaves.
@@ -902,8 +1082,16 @@ opens the PR from the GitHub compare page with the prefilled title/body. Origina
   often, and a merged fix avoids redoing it every release. Leave this plan file out of that pull
   request.
 
+Made 2026-10-06 (Phase 6 close / Phase 7):
+- Phase 6: **closed**. Keep 6.1–6.4 (off by default); drop 6.5's redesign and 6.6–6.9. The user is done with gyro.
+- Phase 7 game: **Fortnite**, private/custom matches only (user's stated use).
+- Aim-assist macro: **right-stick rotational circle only** (no LS strafe jitter, no L2 re-tap).
+- On/off: **master toggle combo**, off at startup and on every profile load, lightbar cue while armed.
+- No detection-avoidance features (randomisation/humanising) in this branch.
+
 ## 6. Next session
 
-**Phase 6 is on hold** (user, 2026-10-06). Tasks 6.1–6.4 are built, pushed and off by default; the 6.5
-hardware check failed (see the note under 6.5). Nothing is scheduled. If the user resumes it, start with the
-redesign listed under 6.5, not 6.6.
+**Phase 7 is next.** Kickoff message:
+
+> Implement Phase 7 of `PLAN-fast-aim-switching.md` (aim macros) as orchestrator, Tasks 7.1–7.5, then pause
+> for my 7.6 hardware test.
