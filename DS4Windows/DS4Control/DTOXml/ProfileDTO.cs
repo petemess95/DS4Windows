@@ -429,6 +429,13 @@ namespace DS4WinWPF.DS4Control.DTOXml
             set => UseSourceLightbar = XmlDataUtilities.StrToBool(value);
         }
 
+        // Optional macro elements; null = absent and not written.
+        [XmlElement("Recoil")]
+        public AimRecoilDTO Recoil { get; set; }
+
+        [XmlElement("Rotate")]
+        public AimRotateDTO Rotate { get; set; }
+
         internal bool IsDefault() => ToConfig().IsDefault;
 
         internal static AimLayerSettingsDTO From(AimLayerConfig config) => new()
@@ -439,12 +446,14 @@ namespace DS4WinWPF.DS4Control.DTOXml
             Delay = config.Delay,
             SourceProfile = config.SourceProfile,
             UseSourceLightbar = config.UseSourceLightbar,
+            Recoil = AimRecoilDTO.From(config.Recoil),
+            Rotate = AimRotateDTO.From(config.Rotate),
         };
 
         // Hand-edited XML may wrap the name in whitespace or newlines; the
         // config trims it.
         internal AimLayerConfig ToConfig() => new(Enabled, Trigger, Threshold, Delay,
-            SourceProfile, UseSourceLightbar);
+            SourceProfile, UseSourceLightbar, Recoil?.ToConfig(), Rotate?.ToConfig());
 
         // Every configured block, in order. Unconfigured blocks are dropped so
         // a profile that never had one saves unchanged.
@@ -470,6 +479,104 @@ namespace DS4WinWPF.DS4Control.DTOXml
                 configs[index] = (blocks[index] ?? new AimLayerSettingsDTO()).ToConfig();
             destination.aimLayers[device] = configs;
         }
+    }
+
+    // Aim macro elements (hand-edited). Every child is kept as written and
+    // only checked when the profile is prepared (AimMacroParser), so a bad
+    // value never fails the load and a loaded block saves as it was. Null
+    // children are not written.
+    public sealed class AimMacrosDTO
+    {
+        [XmlElement("Toggle")]
+        public string Toggle { get; set; }
+
+        [XmlElement("GameDeadZone")]
+        public string GameDeadZone { get; set; }
+
+        [XmlElement("GameDeadZoneShape")]
+        public string GameDeadZoneShape { get; set; }
+
+        [XmlElement("ArmedColor")]
+        public string ArmedColor { get; set; }
+
+        internal static AimMacrosDTO From(AimMacrosConfig config) => config == null ? null : new()
+        {
+            Toggle = config.Toggle,
+            GameDeadZone = config.GameDeadZone,
+            GameDeadZoneShape = config.GameDeadZoneShape,
+            ArmedColor = config.ArmedColor,
+        };
+
+        internal AimMacrosConfig ToConfig() =>
+            new(Toggle, GameDeadZone, GameDeadZoneShape, ArmedColor);
+    }
+
+    public sealed class AimRecoilDTO
+    {
+        [XmlElement("FireThreshold")]
+        public string FireThreshold { get; set; }
+
+        [XmlElement("Delay")]
+        public string Delay { get; set; }
+
+        [XmlElement("Ramp")]
+        public string Ramp { get; set; }
+
+        [XmlElement("PullY")]
+        public string PullY { get; set; }
+
+        [XmlElement("DriftX")]
+        public string DriftX { get; set; }
+
+        [XmlElement("Pattern")]
+        public string Pattern { get; set; }
+
+        internal static AimRecoilDTO From(AimRecoilConfig config) => config == null ? null : new()
+        {
+            FireThreshold = config.FireThreshold,
+            Delay = config.Delay,
+            Ramp = config.Ramp,
+            PullY = config.PullY,
+            DriftX = config.DriftX,
+            Pattern = config.Pattern,
+        };
+
+        internal AimRecoilConfig ToConfig() =>
+            new(FireThreshold, Delay, Ramp, PullY, DriftX, Pattern);
+    }
+
+    public sealed class AimRotateDTO
+    {
+        [XmlElement("Radius")]
+        public string Radius { get; set; }
+
+        [XmlElement("RadiusY")]
+        public string RadiusY { get; set; }
+
+        [XmlElement("Period")]
+        public string Period { get; set; }
+
+        [XmlElement("Direction")]
+        public string Direction { get; set; }
+
+        [XmlElement("WhenFiring")]
+        public string WhenFiring { get; set; }
+
+        [XmlElement("FadeAbove")]
+        public string FadeAbove { get; set; }
+
+        internal static AimRotateDTO From(AimRotateConfig config) => config == null ? null : new()
+        {
+            Radius = config.Radius,
+            RadiusY = config.RadiusY,
+            Period = config.Period,
+            Direction = config.Direction,
+            WhenFiring = config.WhenFiring,
+            FadeAbove = config.FadeAbove,
+        };
+
+        internal AimRotateConfig ToConfig() =>
+            new(Radius, RadiusY, Period, Direction, WhenFiring, FadeAbove);
     }
 
     [XmlRoot("DS4Windows")]
@@ -2442,6 +2549,14 @@ namespace DS4WinWPF.DS4Control.DTOXml
             get; set;
         } = new List<AimLayerSettingsDTO>();
 
+        // Once per profile, after the last <AimLayer>; null = absent and not
+        // written, so profiles without it save unchanged.
+        [XmlElement("AimMacros")]
+        public AimMacrosDTO AimMacros
+        {
+            get; set;
+        }
+
         [XmlElement("DS4OutputTriggerMode")]
         public DS4TriggerOutputMode OutputDS4TriggerMode
         {
@@ -2989,6 +3104,7 @@ namespace DS4WinWPF.DS4Control.DTOXml
             AudioHapticsSettings = source.audioHapticsSettings[deviceIndex].Clone();
             TriggerLabSettings = source.triggerLabSettings[deviceIndex].Clone();
             AimLayers = AimLayerSettingsDTO.From(source, deviceIndex);
+            AimMacros = AimMacrosDTO.From(source.aimMacros[deviceIndex]);
             OutputDS4TriggerMode = source.outputDS4TriggerMode[deviceIndex];
 
             ProfileActions = string.Join("/", source.profileActions[deviceIndex]);
@@ -3903,6 +4019,8 @@ namespace DS4WinWPF.DS4Control.DTOXml
             destination.triggerLabSettings[deviceIndex] = (TriggerLabSettings ?? new TriggerLabProfileSettings()).Clone();
             // Always written: a profile without <AimLayer> must clear the slot.
             AimLayerSettingsDTO.ApplyTo(AimLayers, destination, deviceIndex);
+            // Same for <AimMacros>: absent clears the previous profile's.
+            destination.aimMacros[deviceIndex] = AimMacros?.ToConfig();
             destination.outputDS4TriggerMode[deviceIndex] = OutputDS4TriggerMode;
 
             if (!string.IsNullOrEmpty(ProfileActions))

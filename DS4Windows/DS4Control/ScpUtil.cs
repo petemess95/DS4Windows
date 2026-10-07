@@ -4833,6 +4833,10 @@ namespace DS4Windows
         // Replaced as a whole, never edited in place.
         public IReadOnlyList<AimLayerConfig>[] aimLayers = CreateEmptyAimLayers();
 
+        // Per device: the profile's <AimMacros>, raw; null = none. Replaced
+        // with the aim layers on every load/reset.
+        public AimMacrosConfig[] aimMacros = new AimMacrosConfig[Global.TEST_PROFILE_ITEM_COUNT];
+
         private static IReadOnlyList<AimLayerConfig>[] CreateEmptyAimLayers()
         {
             var result = new IReadOnlyList<AimLayerConfig>[Global.TEST_PROFILE_ITEM_COUNT];
@@ -4852,6 +4856,7 @@ namespace DS4Windows
         private void ResetAimLayer(int device)
         {
             aimLayers[device] = Array.Empty<AimLayerConfig>();
+            aimMacros[device] = null;
             // Only the live store publishes; validation/test stores are private.
             if (ReferenceEquals(this, Global.store))
                 AimLayerState.Clear(device);
