@@ -127,7 +127,7 @@ Deliverables, in order:
 | 4. Testing | Full test run, then you test on the controller | 4.1, 4.2 | Done 2026-10-06 (all pass; no fixes needed) |
 | 5. Hipfire layer | Several aim layers per profile, first match wins, with an optional hold delay (R2 → Edge Hipfire after 100 ms, L2 still wins) | 5.1–5.5 | Done 2026-10-06 (`9da1d4b`, `0ece443`, `e321d2f`; 5.5 passed on hardware) |
 | 6. Gyro aiming | Better gyro-to-stick for small corrections while aiming; every change off by default and byte-identical when off | 6.1–6.9 | **Closed** 2026-10-06: 6.1–6.4 kept (`61d190c`…`92079cc`, off by default); 6.5 check failed; 6.5 redesign and 6.6–6.9 dropped |
-| 7. Aim macros | Recoil compensation and a rotational aim-assist circle inside aim layers, armed by a master toggle; off unless configured *and* armed | 7.1–7.6 | Planned 2026-10-06 |
+| 7. Aim macros | Recoil compensation and a rotational aim-assist circle inside aim layers, armed by a master toggle; off unless configured *and* armed | 7.1–7.6 | 7.1–7.5 done 2026-10-06 (`4c36b81`, `e45df0e`, `f46e768`, `421381f`); 7.6 hardware test next |
 
 Do the phases in order. Tasks are numbered `<phase>.<step>`.
 
@@ -1057,6 +1057,26 @@ the source profile).
   - A sample for Edge Linear: `<AimMacros>` with `FnL+FnR`, and `<Recoil>` + `<Rotate>` inside the existing L2
     block. Every XML sample in the guide is loaded by a test.
 - **7.5 (orchestrator):** full suite, Release build, DLL size + SHA-256, then pause for 7.6.
+  - **Done 2026-10-06 at `421381f`:** `TestCategory!=Benchmark` **7419 pass, 12 expected skips, 0 fail** (2 m 2 s;
+    +123 tests: 69 settings, 32 maths, 6 guide, 16 runtime). Release build 0 errors, 0 warnings. DLL
+    `DS4Windows\bin\x64\Release\net8.0-windows10.0.19041.0\DS4Windows.dll`, 11,046,912 bytes, SHA-256
+    `6044ef120667988c10d29d118bfec6f8a58e829adfbd405c851af99519f32dcb`.
+  - Choices the workers made that the plan left open (all documented in `docs/aim-macros.md`):
+    - `GameDeadZone` capped at 90%. Missing children take defaults (`Ramp` 0, `FireThreshold` 30, `Period` 60,
+      CW, `Any`, `FadeAbove` 0); `<Rotate>` without `<Radius>` is ignored. Duplicate `Toggle` buttons rejected.
+    - A bad `GameDeadZone`/`GameDeadZoneShape`/`ArmedColor` drops the whole `<AimMacros>`; a bad `Toggle` keeps it
+      but it can never arm. Macros need at least one enabled aim layer that builds.
+    - `Pattern` times count from the start of firing (not from the end of `Delay`); the ramp still scales it.
+    - R2 already held when the layer changes: recoil restarts at the change (no new pull needed).
+    - Radial clamp keeps a square-stick corner's length (a tiny pull doesn't pull it onto the circle).
+    - A combo held during a profile load or reconnect doesn't arm; release and press again.
+    - Byte output (with dither) for DS4/DualSense/Edge outputs; high-res for X360, Xbox One, Switch 2 Pro.
+    - Arm/disarm log lines are queued to the thread pool (the GUI log handler takes a lock), format
+      `Aim macros armed (profile "X", controller N)`; load/disconnect disarms add `: profile loaded` /
+      `: controller removed` and log only if it was armed.
+    - Hook: `ControlService.OnReportCore` → `ApplyAimMacros`, after the MapCustom/plain branch, before the send.
+      On the plain path `cState` is `TempState` (the readings preview's buffer), so macro output goes into a
+      per-device `AimMacroOutputState` copy, only on reports where a macro changes the stick.
 - **7.6 (the user, on hardware, DLL-swap method from 1.2; elevated `Start-Process -Verb RunAs` copy).** Back up
   `Profiles\` first.
   1. Regression, profiles unchanged: hipfire/ADS curves and lightbar exactly as after 5.5.
@@ -1091,7 +1111,7 @@ Made 2026-10-06 (Phase 6 close / Phase 7):
 
 ## 6. Next session
 
-**Phase 7 is next.** Kickoff message:
+**Phase 7: Tasks 7.1–7.5 done (`421381f`); 7.6 (user hardware test) is next.** After the test, kickoff message:
 
-> Implement Phase 7 of `PLAN-fast-aim-switching.md` (aim macros) as orchestrator, Tasks 7.1–7.5, then pause
-> for my 7.6 hardware test.
+> Phase 7.6 result: <pass/fail, notes, tuned values>. Record it in `PLAN-fast-aim-switching.md` and fix
+> anything that failed.
